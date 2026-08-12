@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai2d.local/schemas/game-input-v1.schema.json",
+  "title": "AI2D Game Input Script 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "events"],
+  "properties": {
+    "schema_version": {"const": "1"},
+    "events": {
+      "type": "array",
+      "maxItems": 1000000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tick", "action", "kind"],
+        "properties": {
+          "tick": {"type": "integer", "minimum": 0},
+          "action": {"type": "string", "minLength": 1, "maxLength": 256},
+          "kind": {"enum": ["press", "release", "tap"]}
+        }
+      }
+    }
+  }
+}

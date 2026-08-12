@@ -1,0 +1,1 @@
+{"schema_version":"0.1","name":"capacity","seed":1,"world":{"capacity":1},"camera":{"position":[0,0],"half_extent":[1,1]},"textures":[],"spawn_groups":[{"id":"too_many","count":2,"placement":{"kind":"grid","origin":[0,0],"spacing":[1,1],"columns":1},"transform":{}}],"systems":[],"benchmark":{"runs":1,"warmup_frames":0,"measurement_frames":1}}

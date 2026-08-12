@@ -1,0 +1,39 @@
+{
+  "schema_version": "0.2",
+  "id": "game",
+  "world": {"capacity": 128},
+  "camera": {"position": [0, 0], "half_extent": [16, 9]},
+  "collision": {
+    "bounds": [-16, -10, 16, 10],
+    "cell_size": [1, 1],
+    "max_colliders": 128,
+    "max_grid_references": 4096,
+    "max_candidate_pairs": 4096,
+    "max_impacts": 4
+  },
+  "spawn_groups": [
+    {"id": "left_wall", "count": 1, "placement": {"kind": "grid", "origin": [-15.75, 0], "spacing": [1, 1], "columns": 1}, "sprite": {"texture": "sprites", "size": [0.5, 18], "uv": [0.75, 0, 0.25, 1], "tint": [0.15, 0.25, 0.38, 1], "layer": 5}, "collider": {"half_extent": [0.25, 9], "group": "wall", "body": "static"}},
+    {"id": "right_wall", "count": 1, "placement": {"kind": "grid", "origin": [15.75, 0], "spacing": [1, 1], "columns": 1}, "sprite": {"texture": "sprites", "size": [0.5, 18], "uv": [0.75, 0, 0.25, 1], "tint": [0.15, 0.25, 0.38, 1], "layer": 5}, "collider": {"half_extent": [0.25, 9], "group": "wall", "body": "static"}},
+    {"id": "top_wall", "count": 1, "placement": {"kind": "grid", "origin": [0, 8.75], "spacing": [1, 1], "columns": 1}, "sprite": {"texture": "sprites", "size": [31, 0.5], "uv": [0.75, 0, 0.25, 1], "tint": [0.15, 0.25, 0.38, 1], "layer": 5}, "collider": {"half_extent": [15.5, 0.25], "group": "wall", "body": "static"}},
+    {"id": "death_sensor", "count": 1, "placement": {"kind": "grid", "origin": [0, -9.35], "spacing": [1, 1], "columns": 1}, "collider": {"half_extent": [16, 0.25], "group": "death", "body": "static", "trigger": true}},
+    {"id": "paddle", "count": 1, "placement": {"kind": "grid", "origin": [0, -7.5], "spacing": [1, 1], "columns": 1}, "velocity": {"linear": [0, 0]}, "sprite": {"texture": "sprites", "size": [4, 0.65], "uv": [0, 0, 0.25, 1], "layer": 20}, "collider": {"half_extent": [2, 0.325], "group": "paddle", "body": "kinematic"}},
+    {"id": "ball", "count": 1, "placement": {"kind": "grid", "origin": [0, -6.75], "spacing": [1, 1], "columns": 1}, "velocity": {"linear": [0, 0]}, "sprite": {"texture": "sprites", "size": [0.55, 0.55], "uv": [0.25, 0, 0.25, 1], "layer": 30}, "collider": {"half_extent": [0.275, 0.275], "group": "ball", "body": "dynamic"}},
+    {"id": "bricks", "count": 60, "placement": {"kind": "grid", "origin": [-13.5, 5.8], "spacing": [3, -0.78], "columns": 10}, "sprite": {"texture": "sprites", "size": [2.65, 0.58], "uv": [0.5, 0, 0.25, 1], "tint": [0.96, 0.36, 0.46, 1], "layer": 10}, "collider": {"half_extent": [1.325, 0.29], "group": "brick", "body": "static"}}
+  ],
+  "systems": [
+    {"id": "paddle_control", "operation": "axis_control", "group": "paddle", "negative_action": "move_left", "positive_action": "move_right", "speed": 14, "min": -13.5, "max": 13.5},
+    {"id": "launch_ball", "operation": "set_velocity_on_press", "group": "ball", "action": "launch", "velocity": [7, 8]},
+    {"id": "collision", "operation": "simulate_collisions"}
+  ],
+  "collision_rules": [
+    {"a": "ball", "b": "wall", "reactions": [{"kind": "reflect", "target": "a"}, {"kind": "play_sound", "asset": "hit"}]},
+    {"a": "ball", "b": "paddle", "reactions": [{"kind": "reflect", "target": "a"}, {"kind": "play_sound", "asset": "hit"}]},
+    {"a": "ball", "b": "brick", "reactions": [{"kind": "reflect", "target": "a"}, {"kind": "deactivate", "target": "b"}, {"kind": "add_int_state", "state": "score", "value": 100}, {"kind": "play_sound", "asset": "hit"}]},
+    {"a": "ball", "b": "death", "reactions": [{"kind": "deactivate", "target": "a"}, {"kind": "add_int_state", "state": "lives", "value": -1}, {"kind": "reset_group", "group": "ball"}, {"kind": "reset_group", "group": "paddle"}, {"kind": "play_sound", "asset": "lose"}]}
+  ],
+  "ui": [
+    {"id": "score", "kind": "text", "position": [180, 28], "size": [320, 55], "text": "점수: {score}", "font": "font", "color": [0.88, 0.96, 1, 1], "layer": 1000, "text_scale": 0.8},
+    {"id": "lives", "kind": "text", "position": [1080, 28], "size": [300, 55], "text": "목숨: {lives}", "font": "font", "color": [1, 0.75, 0.78, 1], "layer": 1000, "text_scale": 0.8},
+    {"id": "help", "kind": "text", "position": [640, 685], "size": [760, 40], "text": "←→ 또는 A/D 이동  Space 공 발사", "font": "font", "color": [0.56, 0.68, 0.80, 1], "layer": 1000, "text_scale": 0.58}
+  ]
+}

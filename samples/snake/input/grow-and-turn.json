@@ -1,0 +1,1 @@
+{"schema_version":"1","events":[{"tick":12,"action":"down","kind":"tap"},{"tick":18,"action":"left","kind":"tap"},{"tick":24,"action":"up","kind":"tap"},{"tick":30,"action":"restart","kind":"tap"}]}

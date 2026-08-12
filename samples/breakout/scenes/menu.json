@@ -1,0 +1,15 @@
+{
+  "schema_version": "0.2",
+  "id": "menu",
+  "world": {"capacity": 1},
+  "camera": {"position": [0, 0], "half_extent": [16, 9]},
+  "spawn_groups": [],
+  "systems": [],
+  "ui": [
+    {"id": "backdrop", "kind": "panel", "position": [640, 360], "size": [760, 600], "color": [0.04, 0.07, 0.14, 0.96], "layer": 1000},
+    {"id": "title", "kind": "text", "position": [640, 150], "size": [620, 80], "text": "AI2D 브레이크아웃", "font": "font", "color": [0.82, 0.95, 1, 1], "layer": 1010, "text_scale": 1.25},
+    {"id": "start_button", "kind": "button", "position": [640, 315], "size": [360, 74], "text": "시작", "font": "font", "action": "start", "color": [0.08, 0.38, 0.55, 1], "hover_color": [0.12, 0.58, 0.75, 1], "layer": 1010},
+    {"id": "settings_button", "kind": "button", "position": [640, 415], "size": [360, 74], "text": "설정", "font": "font", "action": "open_settings", "color": [0.10, 0.18, 0.31, 1], "hover_color": [0.18, 0.34, 0.50, 1], "layer": 1010},
+    {"id": "quit_button", "kind": "button", "position": [640, 515], "size": [360, 74], "text": "종료", "font": "font", "action": "quit", "color": [0.30, 0.10, 0.17, 1], "hover_color": [0.52, 0.14, 0.22, 1], "layer": 1010}
+  ]
+}

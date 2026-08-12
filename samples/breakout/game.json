@@ -1,0 +1,67 @@
+{
+  "schema_version": "0.2",
+  "name": "AI2D Breakout Validation",
+  "organization": "ai2d",
+  "application": "breakout_validation",
+  "window": {
+    "title": "AI2D 브레이크아웃",
+    "width": 1280,
+    "height": 720,
+    "virtual_width": 1280,
+    "virtual_height": 720,
+    "default_fps": "60"
+  },
+  "assets": [
+    {"id": "sprites", "kind": "png", "path": "assets/sprites.png"},
+    {"id": "font", "kind": "font", "path": "assets/font.png", "metadata": "assets/font.json"},
+    {"id": "hit", "kind": "wav", "path": "assets/hit.wav"},
+    {"id": "lose", "kind": "wav", "path": "assets/lose.wav"}
+  ],
+  "actions": [
+    {"id": "move_left", "keys": ["left", "a"]},
+    {"id": "move_right", "keys": ["right", "d"]},
+    {"id": "launch", "keys": ["space", "enter"]},
+    {"id": "start", "keys": ["space", "enter"]},
+    {"id": "open_settings", "keys": []},
+    {"id": "back", "keys": ["escape"]},
+    {"id": "quit", "keys": ["escape"]},
+    {"id": "restart", "keys": ["space", "enter"]},
+    {"id": "fps_60", "keys": []},
+    {"id": "fps_120", "keys": []},
+    {"id": "fps_144", "keys": []},
+    {"id": "fps_240", "keys": []},
+    {"id": "fps_unlimited", "keys": []}
+  ],
+  "states": [
+    {"id": "score", "initial": 0, "min": 0, "max": 999999},
+    {"id": "lives", "initial": 3, "min": 0, "max": 99}
+  ],
+  "scenes": [
+    {"id": "menu", "path": "scenes/menu.json"},
+    {"id": "settings", "path": "scenes/settings.json"},
+    {"id": "game", "path": "scenes/game.json"},
+    {"id": "win", "path": "scenes/win.json"},
+    {"id": "lose", "path": "scenes/lose.json"}
+  ],
+  "start_scene": "menu",
+  "transitions": [
+    {"from": "menu", "condition": {"kind": "action_pressed", "action": "start"}, "to": "game", "reset_scene": true, "reset_session": true},
+    {"from": "menu", "condition": {"kind": "action_pressed", "action": "open_settings"}, "to": "settings", "reset_scene": true},
+    {"from": "menu", "condition": {"kind": "action_pressed", "action": "quit"}, "to": "$quit"},
+    {"from": "settings", "condition": {"kind": "action_pressed", "action": "back"}, "to": "menu", "reset_scene": true},
+    {"from": "game", "condition": {"kind": "group_inactive", "group": "brick"}, "to": "win", "reset_scene": true},
+    {"from": "game", "condition": {"kind": "int_state_at_most", "state": "lives", "value": 0}, "to": "lose", "reset_scene": true},
+    {"from": "game", "condition": {"kind": "action_pressed", "action": "back"}, "to": "menu", "reset_scene": true},
+    {"from": "win", "condition": {"kind": "action_pressed", "action": "restart"}, "to": "game", "reset_scene": true, "reset_session": true},
+    {"from": "win", "condition": {"kind": "action_pressed", "action": "back"}, "to": "menu", "reset_scene": true},
+    {"from": "lose", "condition": {"kind": "action_pressed", "action": "restart"}, "to": "game", "reset_scene": true, "reset_session": true},
+    {"from": "lose", "condition": {"kind": "action_pressed", "action": "back"}, "to": "menu", "reset_scene": true}
+  ],
+  "fps_actions": [
+    {"action": "fps_60", "cap": "60"},
+    {"action": "fps_120", "cap": "120"},
+    {"action": "fps_144", "cap": "144"},
+    {"action": "fps_240", "cap": "240"},
+    {"action": "fps_unlimited", "cap": "unlimited"}
+  ]
+}

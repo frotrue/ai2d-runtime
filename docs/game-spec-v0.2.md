@@ -1,0 +1,25 @@
+# GameManifest and SceneSpec 0.2
+
+GameManifest 0.2 is the deployable game entry point. It declares the window and virtual resolution, file assets, actions, bounded integer states, scene files, transitions, and optional FPS actions. Every referenced path must be relative to and remain inside the manifest directory. Compilation resolves all names to numeric indices, reads font metadata, validates static glyph coverage, and computes source and plan hashes.
+
+Each SceneSpec 0.2 declares a bounded world, camera, optional collision grid, grid-placed spawn groups, ordered built-in systems, collision rules, and virtual-resolution UI. The only v0.2 systems are `axis_control`, `set_velocity_on_press`, and `simulate_collisions`. The only collision reactions are `reflect`, `deactivate`, `add_int_state`, `reset_group`, and `play_sound`. These closed sets are deliberate: arbitrary scripts and plugins remain out of scope.
+
+The normative machine-readable contracts are [game-manifest-v0.2.schema.json](../schemas/game-manifest-v0.2.schema.json) and [scene-v0.2.schema.json](../schemas/scene-v0.2.schema.json). The C++ compiler remains authoritative and is stricter where JSON Schema cannot check cross-file references, path containment, capacity sums, duplicate IDs, state placeholders, font glyph coverage, or renderer limits.
+
+## Runtime semantics
+
+- Simulation is fixed at 60 Hz. A rendered frame may execute zero through eight ticks; elapsed time is clamped to 250 ms and excess is reported. Headless execution accepts exact positive tick counts.
+- Input actions expose down, pressed, and released state. Supported keys are Escape, arrows, A, D, Space, Enter, and Tab. SDL event edges are retained across a zero-tick rendered frame and consumed by exactly the first fixed tick of a catch-up frame. A press and release between polls therefore remains observable. Buttons additionally synthesize their action from mouse clicks or focused Enter/Space activation.
+- Collision broadphase is a bounded uniform grid supporting up to 10,000 colliders. Narrowphase uses swept AABB, actual per-tick kinematic displacement, relative-velocity reflection, and a fresh grid query for every reflected segment. Trigger-only contact does not stop the remaining sweep. Dynamic bodies receive at most the configured number of impacts per tick.
+- UI coordinates use a top-left origin in manifest virtual-resolution pixels, while scene/world coordinates are conventional Y-up. Panel, centered text, and button elements render through ordinary sprite submissions; buttons default to white `text_color`. Text `{state_name}` placeholders compile to numeric state tokens and are formatted without steady-state heap allocation.
+- PNG and PCM/IEEE-float WAV are decoded by SDL 3 core only after bounded source, dimensions, format, frame count, and worst-case converted-size preflight. Each source is limited to 64 MiB, each decoded asset to 256 MiB, and presented startup to a 512 MiB aggregate decoded-resident budget. Images are decoded/uploaded incrementally; WAV decoding is skipped when audio is disabled or unavailable. WAV data is converted to 48 kHz stereo float PCM and mixed through a bounded voice pool.
+- Render limits are 60, 120, 144, 240, or unlimited. A 60 FPS request uses FIFO presentation; higher caps prefer MAILBOX, then IMMEDIATE, then FIFO. Requested and effective presentation modes are observable.
+- Settings use the SDL preference directory, exact schema parsing, unique temporary files, serialized local writers, and atomic replacement. A missing settings file leaves the manifest default intact. Resolution order is CLI override, saved value, then manifest default.
+- Transitions are checked in declaration order after the frame's fixed ticks; the first match wins. With `reset_scene: false` (the default), leaving a scene snapshots its transforms, velocities, sprite/collider state, active flags, and focused button, then later re-entry restores that snapshot. With `reset_scene: true`, re-entry is rebuilt from the compiled scene plan and any older snapshot is discarded. `reset_session` resets bounded integer states only after the destination scene has loaded successfully.
+- Headless and offscreen CLI runs are non-interactive and therefore require an explicit positive `--frames` count. Interactive presented runs continue until a transition requests quit or the window closes.
+
+## Declarative Breakout
+
+`samples/breakout/game.json` exercises all v0.2 boundaries with menu, settings, game, win, and lose scenes; a 10×6 brick grid; 100 points per brick; three lives; keyboard/mouse UI; continuous collision; PNG sprites/font; WAV effects; and FPS persistence. All gameplay behavior is data. `tools/generate_breakout_assets.py` deterministically recreates its small validation assets from the Windows Malgun Gothic font and procedural shapes and tones.
+
+Animation graphs, an editor, scripting/plugins, general rigid-body physics, tilemaps, particles, save games, networking, and hot reload remain outside v0.2.

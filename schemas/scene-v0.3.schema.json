@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai2d.local/schemas/scene-v0.3.schema.json",
+  "title": "AI2D SceneSpec 0.3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "world", "camera", "grids", "spawn_groups", "systems"],
+  "properties": {
+    "schema_version": {"const": "0.3"},
+    "id": {"$ref": "#/$defs/id"},
+    "world": {"type": "object", "additionalProperties": false, "required": ["capacity"], "properties": {"capacity": {"type": "integer", "minimum": 1, "maximum": 10000}}},
+    "camera": {"type": "object", "additionalProperties": false, "properties": {"position": {"$ref": "#/$defs/vec2"}, "half_extent": {"$ref": "#/$defs/positive_vec2"}}},
+    "collision": {"type": "object", "additionalProperties": false, "properties": {"bounds": {"$ref": "#/$defs/vec4"}, "cell_size": {"$ref": "#/$defs/positive_vec2"}, "max_colliders": {"type": "integer", "minimum": 1, "maximum": 10000}, "max_grid_references": {"type": "integer", "minimum": 1, "maximum": 10000000}, "max_candidate_pairs": {"type": "integer", "minimum": 1, "maximum": 10000000}, "max_impacts": {"type": "integer", "minimum": 1, "maximum": 16}}},
+    "grids": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/grid"}},
+    "spawn_groups": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/spawn"}},
+    "systems": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/system"}},
+    "collision_rules": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/collision_rule"}},
+    "rules": {"type": "array", "maxItems": 512, "items": {"$ref": "#/$defs/rule"}},
+    "ui": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/ui"}}
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "number": {"type": "number", "minimum": -3.4028235e38, "maximum": 3.4028235e38},
+    "vec2": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"}], "items": false},
+    "positive_vec2": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"type": "number", "exclusiveMinimum": 0}, {"type": "number", "exclusiveMinimum": 0}], "items": false},
+    "vec4": {"type": "array", "minItems": 4, "maxItems": 4, "prefixItems": [{"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"}], "items": false},
+    "color": {"type": "array", "minItems": 4, "maxItems": 4, "prefixItems": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "number", "minimum": 0, "maximum": 1}, {"type": "number", "minimum": 0, "maximum": 1}, {"type": "number", "minimum": 0, "maximum": 1}], "items": false},
+    "direction": {"enum": ["up", "down", "left", "right"]},
+    "comparison": {"enum": ["eq", "ne", "lt", "le", "gt", "ge"]},
+    "grid": {"type": "object", "additionalProperties": false, "required": ["id", "first_cell_center", "cell_size", "columns", "rows"], "properties": {"id": {"$ref": "#/$defs/id"}, "first_cell_center": {"$ref": "#/$defs/vec2"}, "cell_size": {"$ref": "#/$defs/positive_vec2"}, "columns": {"type": "integer", "minimum": 1, "maximum": 1000000}, "rows": {"type": "integer", "minimum": 1, "maximum": 1000000}}},
+    "placement": {"type": "object", "additionalProperties": false, "required": ["kind", "origin", "spacing", "columns"], "properties": {"kind": {"const": "grid"}, "origin": {"$ref": "#/$defs/vec2"}, "spacing": {"$ref": "#/$defs/vec2"}, "columns": {"type": "integer", "minimum": 1, "maximum": 10000}}},
+    "transform": {"type": "object", "additionalProperties": false, "properties": {"position_offset": {"$ref": "#/$defs/vec2"}, "rotation": {"$ref": "#/$defs/number"}, "scale": {"$ref": "#/$defs/positive_vec2"}}},
+    "velocity": {"type": "object", "additionalProperties": false, "properties": {"linear": {"$ref": "#/$defs/vec2"}, "angular": {"$ref": "#/$defs/number"}}},
+    "sprite": {"type": "object", "additionalProperties": false, "required": ["texture", "size"], "properties": {"texture": {"$ref": "#/$defs/id"}, "size": {"$ref": "#/$defs/positive_vec2"}, "pivot": {"$ref": "#/$defs/vec2"}, "uv": {"$ref": "#/$defs/vec4"}, "tint": {"$ref": "#/$defs/color"}, "layer": {"type": "integer", "minimum": -1000000, "maximum": 1000000}, "visible": {"type": "boolean"}}},
+    "collider": {"type": "object", "additionalProperties": false, "required": ["half_extent", "group", "body"], "properties": {"offset": {"$ref": "#/$defs/vec2"}, "half_extent": {"$ref": "#/$defs/positive_vec2"}, "group": {"$ref": "#/$defs/id"}, "body": {"enum": ["static", "kinematic", "dynamic"]}, "trigger": {"type": "boolean"}, "enabled": {"type": "boolean"}}},
+    "spawn": {"type": "object", "additionalProperties": false, "required": ["id", "count", "placement"], "properties": {"id": {"$ref": "#/$defs/id"}, "count": {"type": "integer", "minimum": 1, "maximum": 10000}, "active_count": {"type": "integer", "minimum": 0, "maximum": 10000}, "placement": {"$ref": "#/$defs/placement"}, "transform": {"$ref": "#/$defs/transform"}, "velocity": {"$ref": "#/$defs/velocity"}, "sprite": {"$ref": "#/$defs/sprite"}, "collider": {"$ref": "#/$defs/collider"}}},
+    "system": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["id", "operation", "group", "negative_action", "positive_action", "speed", "min", "max"], "properties": {"id": {"$ref": "#/$defs/id"}, "operation": {"const": "axis_control"}, "group": {"$ref": "#/$defs/id"}, "negative_action": {"$ref": "#/$defs/id"}, "positive_action": {"$ref": "#/$defs/id"}, "speed": {"type": "number", "exclusiveMinimum": 0}, "min": {"$ref": "#/$defs/number"}, "max": {"$ref": "#/$defs/number"}}},
+      {"type": "object", "additionalProperties": false, "required": ["id", "operation", "group", "action", "velocity"], "properties": {"id": {"$ref": "#/$defs/id"}, "operation": {"const": "set_velocity_on_press"}, "group": {"$ref": "#/$defs/id"}, "action": {"$ref": "#/$defs/id"}, "velocity": {"$ref": "#/$defs/vec2"}}},
+      {"type": "object", "additionalProperties": false, "required": ["id", "operation"], "properties": {"id": {"$ref": "#/$defs/id"}, "operation": {"const": "simulate_collisions"}}},
+      {"type": "object", "additionalProperties": false, "required": ["id", "operation", "grid", "group", "step_interval_ticks", "initial_direction", "prevent_reverse"], "properties": {"id": {"$ref": "#/$defs/id"}, "operation": {"const": "grid_motion"}, "grid": {"$ref": "#/$defs/id"}, "group": {"$ref": "#/$defs/id"}, "step_interval_ticks": {"type": "integer", "minimum": 1, "maximum": 1000000}, "initial_direction": {"$ref": "#/$defs/direction"}, "prevent_reverse": {"type": "boolean"}}},
+      {"type": "object", "additionalProperties": false, "required": ["id", "operation", "leader", "followers", "motion_system"], "properties": {"id": {"$ref": "#/$defs/id"}, "operation": {"const": "follow_transform_chain"}, "leader": {"$ref": "#/$defs/id"}, "followers": {"$ref": "#/$defs/id"}, "motion_system": {"$ref": "#/$defs/id"}}}
+    ]},
+    "reaction": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["kind", "target"], "properties": {"kind": {"enum": ["reflect", "deactivate"]}, "target": {"enum": ["a", "b"]}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "state", "value"], "properties": {"kind": {"const": "add_int_state"}, "state": {"$ref": "#/$defs/id"}, "value": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "group"], "properties": {"kind": {"const": "reset_group"}, "group": {"$ref": "#/$defs/id"}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "asset"], "properties": {"kind": {"const": "play_sound"}, "asset": {"$ref": "#/$defs/id"}}}
+    ]},
+    "collision_rule": {"type": "object", "additionalProperties": false, "required": ["id", "a", "b", "reactions"], "properties": {"id": {"$ref": "#/$defs/id"}, "a": {"$ref": "#/$defs/id"}, "b": {"$ref": "#/$defs/id"}, "reactions": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/reaction"}}}},
+    "event": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "scene_enter"}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "action"], "properties": {"kind": {"enum": ["action_pressed", "action_released"]}, "action": {"$ref": "#/$defs/id"}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "interval_ticks"], "properties": {"kind": {"const": "fixed_interval"}, "interval_ticks": {"type": "integer", "minimum": 1, "maximum": 1000000}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "rule"], "properties": {"kind": {"const": "collision"}, "rule": {"$ref": "#/$defs/id"}}}
+    ]},
+    "condition": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["kind", "state", "op", "value"], "properties": {"kind": {"const": "int_state"}, "state": {"$ref": "#/$defs/id"}, "op": {"$ref": "#/$defs/comparison"}, "value": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "group", "op", "value"], "properties": {"kind": {"const": "group_active_count"}, "group": {"$ref": "#/$defs/id"}, "op": {"$ref": "#/$defs/comparison"}, "value": {"type": "integer", "minimum": 0}}}
+    ]},
+    "target": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["kind", "group"], "properties": {"kind": {"const": "group"}, "group": {"$ref": "#/$defs/id"}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "group", "index"], "properties": {"kind": {"const": "index"}, "group": {"$ref": "#/$defs/id"}, "index": {"type": "integer", "minimum": 0}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"enum": ["collision_a", "collision_b"]}}}
+    ]},
+    "collision_target": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"enum": ["collision_a", "collision_b"]}}},
+    "action": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["kind", "state", "value"], "properties": {"kind": {"enum": ["set_int_state", "add_int_state"]}, "state": {"$ref": "#/$defs/id"}, "value": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "target"], "properties": {"kind": {"enum": ["activate", "deactivate"]}, "target": {"$ref": "#/$defs/target"}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "group", "count"], "properties": {"kind": {"const": "set_group_active_count"}, "group": {"$ref": "#/$defs/id"}, "count": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "object", "additionalProperties": false, "required": ["state"], "properties": {"state": {"$ref": "#/$defs/id"}}}]}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "target", "velocity"], "properties": {"kind": {"const": "set_velocity"}, "target": {"$ref": "#/$defs/target"}, "velocity": {"$ref": "#/$defs/vec2"}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "system", "direction"], "properties": {"kind": {"const": "queue_grid_direction"}, "system": {"$ref": "#/$defs/id"}, "direction": {"$ref": "#/$defs/direction"}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "group"], "properties": {"kind": {"const": "reset_group"}, "group": {"$ref": "#/$defs/id"}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "asset"], "properties": {"kind": {"const": "play_sound"}, "asset": {"$ref": "#/$defs/id"}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "target", "grid", "occupied_groups"], "properties": {"kind": {"const": "relocate_to_free_cell"}, "target": {"$ref": "#/$defs/collision_target"}, "grid": {"$ref": "#/$defs/id"}, "occupied_groups": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}, "result_state": {"$ref": "#/$defs/id"}}}
+    ]},
+    "rule": {"type": "object", "additionalProperties": false, "required": ["id", "event", "actions"], "properties": {"id": {"$ref": "#/$defs/id"}, "event": {"$ref": "#/$defs/event"}, "conditions": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/condition"}}, "actions": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/action"}}}},
+    "ui": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["id", "kind", "position", "size"], "properties": {"id": {"$ref": "#/$defs/id"}, "kind": {"const": "panel"}, "position": {"$ref": "#/$defs/vec2"}, "size": {"$ref": "#/$defs/positive_vec2"}, "color": {"$ref": "#/$defs/color"}, "hover_color": {"$ref": "#/$defs/color"}, "layer": {"type": "integer"}, "text_scale": {"type": "number", "exclusiveMinimum": 0, "maximum": 16}}},
+      {"type": "object", "additionalProperties": false, "required": ["id", "kind", "position", "size", "text", "font"], "properties": {"id": {"$ref": "#/$defs/id"}, "kind": {"const": "text"}, "position": {"$ref": "#/$defs/vec2"}, "size": {"$ref": "#/$defs/positive_vec2"}, "text": {"$ref": "#/$defs/id"}, "font": {"$ref": "#/$defs/id"}, "color": {"$ref": "#/$defs/color"}, "hover_color": {"$ref": "#/$defs/color"}, "text_color": {"$ref": "#/$defs/color"}, "layer": {"type": "integer"}, "text_scale": {"type": "number", "exclusiveMinimum": 0, "maximum": 16}}},
+      {"type": "object", "additionalProperties": false, "required": ["id", "kind", "position", "size", "text", "font", "action"], "properties": {"id": {"$ref": "#/$defs/id"}, "kind": {"const": "button"}, "position": {"$ref": "#/$defs/vec2"}, "size": {"$ref": "#/$defs/positive_vec2"}, "text": {"$ref": "#/$defs/id"}, "font": {"$ref": "#/$defs/id"}, "action": {"$ref": "#/$defs/id"}, "color": {"$ref": "#/$defs/color"}, "hover_color": {"$ref": "#/$defs/color"}, "text_color": {"$ref": "#/$defs/color"}, "layer": {"type": "integer"}, "text_scale": {"type": "number", "exclusiveMinimum": 0, "maximum": 16}}}
+    ]}
+  }
+}

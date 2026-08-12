@@ -1,0 +1,12 @@
+/artifacts/
+/build/
+/build-*/
+/.codegraph/
+/.cache/
+/.tools/
+__pycache__/
+*.pyc
+*.pdb
+*.ilk
+*.user
+*.log

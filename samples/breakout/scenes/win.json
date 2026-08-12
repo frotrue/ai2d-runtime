@@ -1,0 +1,15 @@
+{
+  "schema_version": "0.2",
+  "id": "win",
+  "world": {"capacity": 1},
+  "camera": {"position": [0, 0], "half_extent": [16, 9]},
+  "spawn_groups": [],
+  "systems": [],
+  "ui": [
+    {"id": "backdrop", "kind": "panel", "position": [640, 360], "size": [760, 560], "color": [0.03, 0.13, 0.14, 0.97], "layer": 1000},
+    {"id": "title", "kind": "text", "position": [640, 175], "size": [440, 90], "text": "승리!", "font": "font", "color": [0.56, 1, 0.78, 1], "layer": 1010, "text_scale": 1.5},
+    {"id": "score", "kind": "text", "position": [640, 280], "size": [420, 60], "text": "점수: {score}", "font": "font", "color": [0.88, 0.96, 1, 1], "layer": 1010},
+    {"id": "restart", "kind": "button", "position": [640, 405], "size": [360, 74], "text": "다시 플레이", "font": "font", "action": "restart", "color": [0.08, 0.40, 0.36, 1], "hover_color": [0.12, 0.64, 0.54, 1], "layer": 1010},
+    {"id": "menu", "kind": "button", "position": [640, 510], "size": [360, 74], "text": "메뉴로", "font": "font", "action": "back", "color": [0.11, 0.20, 0.32, 1], "hover_color": [0.20, 0.37, 0.54, 1], "layer": 1010}
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "schema_version":"0.3","seed":20260812,"name":"AI2D Snake","organization":"ai2d","application":"snake",
+  "window":{"title":"AI2D Snake","width":960,"height":720,"virtual_width":960,"virtual_height":720,"default_fps":"60"},
+  "assets":[
+    {"id":"sprites","kind":"png","path":"assets/sprites.png"},
+    {"id":"font","kind":"font","path":"assets/font.png","metadata":"assets/font.json"}
+  ],
+  "actions":[
+    {"id":"up","keys":["up"]},{"id":"down","keys":["down"]},{"id":"left","keys":["left","a"]},
+    {"id":"right","keys":["right","d"]},{"id":"restart","keys":["space","enter"]},{"id":"quit","keys":["escape"]}
+  ],
+  "states":[
+    {"id":"score","initial":0,"min":0,"max":9999},{"id":"length","initial":2,"min":0,"max":63},
+    {"id":"food_available","initial":1,"min":0,"max":1}
+  ],
+  "scenes":[{"id":"game","path":"scenes/game.json"},{"id":"win","path":"scenes/win.json"},{"id":"lose","path":"scenes/lose.json"}],
+  "start_scene":"game",
+  "transitions":[
+    {"from":"game","condition":{"kind":"int_state_at_least","state":"length","value":63},"to":"win","reset_scene":true},
+    {"from":"game","condition":{"kind":"int_state_at_most","state":"food_available","value":0},"to":"win","reset_scene":true},
+    {"from":"game","condition":{"kind":"int_state_at_most","state":"length","value":0},"to":"lose","reset_scene":true},
+    {"from":"game","condition":{"kind":"action_pressed","action":"quit"},"to":"$quit"},
+    {"from":"win","condition":{"kind":"action_pressed","action":"restart"},"to":"game","reset_scene":true,"reset_session":true},
+    {"from":"lose","condition":{"kind":"action_pressed","action":"restart"},"to":"game","reset_scene":true,"reset_session":true}
+  ]
+}

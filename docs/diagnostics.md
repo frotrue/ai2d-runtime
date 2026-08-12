@@ -1,0 +1,57 @@
+# Structured diagnostics
+
+Every diagnostic contains `code`, `severity`, `subsystem`, `message`, a structured `context` object, a `suggestions` array, and `source` (an object or `null`). Frame/timestamp fields are added when relevant. Codes are stable interface values; changing their meaning requires an ADR or explicit compatibility note.
+
+## Registered codes
+
+| Code | Meaning |
+|---|---|
+| `ARCH_DEPENDENCY_VIOLATION` | Include, target, or hot-path architecture boundary was crossed. |
+| `TOOL_MISSING` | Required or requested external tool/layer is not discoverable. |
+| `TOOL_VERSION_UNSUPPORTED` | A tool exists but cannot satisfy the required contract. |
+| `COMMAND_UNAVAILABLE` | A command implementation or its built binary is not present. |
+| `INPUT_INVALID` | CLI input is malformed independently of ScenarioSpec semantics. |
+| `IR_SCHEMA_INVALID` | ScenarioSpec shape/type/required field is invalid. |
+| `IR_SCHEMA_VERSION_UNSUPPORTED` | `schema_version` is not supported. |
+| `IR_UNKNOWN_OPERATION` | A system names an operation outside the built-in table. |
+| `IR_ACCESS_MISMATCH` | An author assertion conflicts with canonical operation access. |
+| `IR_DEPENDENCY_CYCLE` | System `after` edges form a cycle or illegal phase edge. |
+| `IR_AMBIGUOUS_WRITE_ORDER` | Same-phase writers lack an explicit dependency order. |
+| `IR_CAPACITY_EXCEEDED` | Resolved spawn cardinality exceeds declared world capacity. |
+| `IR_MISSING_TEXTURE` | A sprite references an unresolved texture. |
+| `IR_INVALID_BOUNDS` | Bounds are non-finite, inverted, or otherwise invalid. |
+| `WORLD_STALE_ENTITY` | Entity index/generation is invalid or no longer alive. |
+| `WORLD_CAPACITY_EXCEEDED` | Entity/component reserve contract cannot accept a create. |
+| `WORLD_STRUCTURAL_MUTATION_DURING_QUERY` | Create/destroy/add/remove was requested during a borrowed query. |
+| `MEM_FRAME_ARENA_OVERFLOW` | Fixed frame arena could not satisfy an allocation. |
+| `MEM_FRAME_HEAP_ALLOCATION` | Tracked C++ heap allocation occurred in a measured frame. |
+| `MEM_CAPACITY_GROWTH` | A reserved hot-path container changed capacity in measurement. |
+| `RENDER_INVALID_TEXTURE_HANDLE` | Texture handle index/generation is stale or invalid. |
+| `RENDER_BATCH_FRAGMENTATION` | Layer/texture keys exceeded the documented fragmentation threshold. |
+| `RENDER_UPLOAD_CAPACITY_EXCEEDED` | Instance upload would exceed preallocated frame-slot capacity. |
+| `VK_DEVICE_UNSUPPORTED` | Vulkan version/features/queues required by v0.1 are unavailable. |
+| `VK_VALIDATION` | Structured standard/synchronization validation callback message. |
+| `VK_SWAPCHAIN_ERROR` | Acquire/present/recreation failed outside normal out-of-date handling. |
+| `PERF_BASELINE_INCOMPARABLE` | Benchmark fingerprints are incompatible. |
+| `PERF_REGRESSION` | Comparable result crossed a robust regression threshold. |
+| `PERF_NOISE_TOO_HIGH` | Dispersion prevents a reliable performance conclusion. |
+| `INTERNAL_ERROR` | An invariant or unexpected implementation failure occurred. |
+
+## Command envelope and exits
+
+Machine-readable commands emit:
+
+```json
+{
+  "schema_version": 1,
+  "command": "doctor",
+  "status": "pass",
+  "build": {},
+  "environment": {},
+  "diagnostics": [],
+  "metrics": {},
+  "artifacts": []
+}
+```
+
+Unavailable numeric metrics are represented as `null` together with a reason field; NaN and Infinity are never emitted. Exit codes are 0 normal/PASS, 1 validation/test/benchmark failure, 2 invalid command/input, 3 unavailable required capability/tool, and 4 internal error.

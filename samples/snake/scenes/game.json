@@ -1,0 +1,41 @@
+{
+  "schema_version":"0.3","id":"game","world":{"capacity":100},"camera":{"position":[3.5,3.5],"half_extent":[6,4.5]},
+  "collision":{"bounds":[-1.5,-1.5,9.5,9.5],"cell_size":[1,1],"max_colliders":100,"max_grid_references":768,"max_candidate_pairs":768,"max_impacts":4},
+  "grids":[{"id":"board","first_cell_center":[0,0],"cell_size":[1,1],"columns":8,"rows":8}],
+  "spawn_groups":[
+    {"id":"head","count":1,"active_count":1,"placement":{"kind":"grid","origin":[4,4],"spacing":[1,1],"columns":1},"velocity":{"linear":[0,0]},"sprite":{"texture":"sprites","size":[0.9,0.9],"uv":[0,0,0.25,1],"layer":20},"collider":{"half_extent":[0.42,0.42],"group":"head_hit","body":"dynamic"}},
+    {"id":"tail","count":63,"active_count":2,"placement":{"kind":"grid","origin":[3,4],"spacing":[-1,0],"columns":2},"sprite":{"texture":"sprites","size":[0.86,0.86],"uv":[0.25,0,0.25,1],"layer":15},"collider":{"half_extent":[0.4,0.4],"group":"body","body":"static","trigger":true}},
+    {"id":"food","count":1,"active_count":1,"placement":{"kind":"grid","origin":[6,4],"spacing":[1,1],"columns":1},"sprite":{"texture":"sprites","size":[0.82,0.82],"uv":[0.5,0,0.25,1],"layer":10},"collider":{"half_extent":[0.36,0.36],"group":"food_hit","body":"static","trigger":true}},
+    {"id":"wall_bottom","count":8,"active_count":8,"placement":{"kind":"grid","origin":[0,-1],"spacing":[1,0],"columns":8},"collider":{"half_extent":[0.45,0.45],"group":"wall_hit","body":"static","trigger":true}},
+    {"id":"wall_top","count":8,"active_count":8,"placement":{"kind":"grid","origin":[0,8],"spacing":[1,0],"columns":8},"collider":{"half_extent":[0.45,0.45],"group":"wall_hit","body":"static","trigger":true}},
+    {"id":"wall_left","count":8,"active_count":8,"placement":{"kind":"grid","origin":[-1,0],"spacing":[0,1],"columns":1},"collider":{"half_extent":[0.45,0.45],"group":"wall_hit","body":"static","trigger":true}},
+    {"id":"wall_right","count":8,"active_count":8,"placement":{"kind":"grid","origin":[8,0],"spacing":[0,1],"columns":1},"collider":{"half_extent":[0.45,0.45],"group":"wall_hit","body":"static","trigger":true}}
+  ],
+  "systems":[
+    {"id":"snake_motion","operation":"grid_motion","grid":"board","group":"head","step_interval_ticks":6,"initial_direction":"right","prevent_reverse":true},
+    {"id":"collision","operation":"simulate_collisions"},
+    {"id":"tail_follow","operation":"follow_transform_chain","leader":"head","followers":"tail","motion_system":"snake_motion"}
+  ],
+  "collision_rules":[
+    {"id":"eat","a":"head_hit","b":"food_hit","reactions":[]},
+    {"id":"hit_body","a":"head_hit","b":"body","reactions":[]},
+    {"id":"hit_wall","a":"head_hit","b":"wall_hit","reactions":[]}
+  ],
+  "rules":[
+    {"id":"turn_up","event":{"kind":"action_pressed","action":"up"},"actions":[{"kind":"queue_grid_direction","system":"snake_motion","direction":"up"}]},
+    {"id":"turn_down","event":{"kind":"action_pressed","action":"down"},"actions":[{"kind":"queue_grid_direction","system":"snake_motion","direction":"down"}]},
+    {"id":"turn_left","event":{"kind":"action_pressed","action":"left"},"actions":[{"kind":"queue_grid_direction","system":"snake_motion","direction":"left"}]},
+    {"id":"turn_right","event":{"kind":"action_pressed","action":"right"},"actions":[{"kind":"queue_grid_direction","system":"snake_motion","direction":"right"}]},
+    {"id":"eat_food","event":{"kind":"collision","rule":"eat"},"actions":[
+      {"kind":"add_int_state","state":"score","value":10},{"kind":"add_int_state","state":"length","value":1},
+      {"kind":"set_group_active_count","group":"tail","count":{"state":"length"}},
+      {"kind":"relocate_to_free_cell","target":{"kind":"collision_b"},"grid":"board","occupied_groups":["head","tail"],"result_state":"food_available"}
+    ]},
+    {"id":"body_game_over","event":{"kind":"collision","rule":"hit_body"},"actions":[{"kind":"set_int_state","state":"length","value":0}]},
+    {"id":"wall_game_over","event":{"kind":"collision","rule":"hit_wall"},"actions":[{"kind":"set_int_state","state":"length","value":0}]}
+  ],
+  "ui":[
+    {"id":"score_text","kind":"text","position":[170,35],"size":[300,40],"text":"SCORE: {score}","font":"font","color":[1,1,1,1],"layer":1000,"text_scale":2},
+    {"id":"help_text","kind":"text","position":[660,35],"size":[520,40],"text":"ARROWS MOVE  ESC QUIT","font":"font","color":[0.7,0.85,1,1],"layer":1000,"text_scale":1.5}
+  ]
+}

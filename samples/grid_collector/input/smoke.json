@@ -1,0 +1,1 @@
+{"schema_version":"1","events":[{"tick":6,"action":"left","kind":"tap"},{"tick":12,"action":"up","kind":"tap"},{"tick":18,"action":"right","kind":"tap"},{"tick":42,"action":"down","kind":"tap"},{"tick":66,"action":"left","kind":"tap"},{"tick":108,"action":"up","kind":"tap"},{"tick":132,"action":"right","kind":"tap"},{"tick":150,"action":"restart","kind":"tap"}]}

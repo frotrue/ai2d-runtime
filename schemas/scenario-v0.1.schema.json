@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ai2d/scenario-v0.1.schema.json",
+  "title": "AI2D ScenarioSpec v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "name", "seed", "world", "camera", "textures", "spawn_groups", "systems", "benchmark"],
+  "properties": {
+    "schema_version": {"const": "0.1"},
+    "name": {"$ref": "#/$defs/id"},
+    "seed": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+    "world": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capacity"],
+      "properties": {"capacity": {"type": "integer", "minimum": 1, "maximum": 1000000}}
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position", "half_extent"],
+      "properties": {
+        "position": {"$ref": "#/$defs/vec2"},
+        "half_extent": {"$ref": "#/$defs/positive_vec2"}
+      }
+    },
+    "textures": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/texture"}
+    },
+    "spawn_groups": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/spawn_group"}
+    },
+    "systems": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/system"}
+    },
+    "benchmark": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runs", "warmup_frames", "measurement_frames"],
+      "properties": {
+        "runs": {"type": "integer", "minimum": 1, "maximum": 100},
+        "warmup_frames": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "measurement_frames": {"type": "integer", "minimum": 1, "maximum": 1000000}
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1},
+    "vec2": {
+      "type": "array",
+      "prefixItems": [{"type": "number"}, {"type": "number"}],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "positive_vec2": {
+      "type": "array",
+      "prefixItems": [{"type": "number", "exclusiveMinimum": 0}, {"type": "number", "exclusiveMinimum": 0}],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "color": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "minimum": 0, "maximum": 1},
+        {"type": "number", "minimum": 0, "maximum": 1},
+        {"type": "number", "minimum": 0, "maximum": 1},
+        {"type": "number", "minimum": 0, "maximum": 1}
+      ],
+      "items": false,
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "properties": {"min": {"$ref": "#/$defs/vec2"}, "max": {"$ref": "#/$defs/vec2"}}
+    },
+    "texture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "width", "height", "color"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "kind": {"enum": ["solid", "checker"]},
+        "width": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "height": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "cell_size": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "color": {"$ref": "#/$defs/color"},
+        "color2": {"$ref": "#/$defs/color"}
+      },
+      "allOf": [{"if": {"properties": {"kind": {"const": "checker"}}}, "then": {"required": ["cell_size", "color2"]}}]
+    },
+    "grid_placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "origin", "spacing", "columns"],
+      "properties": {
+        "kind": {"const": "grid"},
+        "origin": {"$ref": "#/$defs/vec2"},
+        "spacing": {"$ref": "#/$defs/vec2"},
+        "columns": {"type": "integer", "minimum": 1, "maximum": 1000000}
+      }
+    },
+    "random_placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "bounds"],
+      "properties": {"kind": {"const": "seeded_random"}, "bounds": {"$ref": "#/$defs/bounds"}}
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "position_offset": {"$ref": "#/$defs/vec2"},
+        "rotation": {"type": "number"},
+        "scale": {"$ref": "#/$defs/positive_vec2"}
+      }
+    },
+    "velocity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"linear": {"$ref": "#/$defs/vec2"}, "angular": {"type": "number"}}
+    },
+    "sprite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["texture"],
+      "properties": {
+        "texture": {"$ref": "#/$defs/id"},
+        "size": {"$ref": "#/$defs/positive_vec2"},
+        "pivot": {"$ref": "#/$defs/vec2"},
+        "tint": {"$ref": "#/$defs/color"},
+        "layer": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+        "visible": {"type": "boolean"}
+      }
+    },
+    "spawn_group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "count", "placement", "transform"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "count": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "placement": {"oneOf": [{"$ref": "#/$defs/grid_placement"}, {"$ref": "#/$defs/random_placement"}]},
+        "transform": {"$ref": "#/$defs/transform"},
+        "velocity": {"$ref": "#/$defs/velocity"},
+        "sprite": {"$ref": "#/$defs/sprite"}
+      }
+    },
+    "component_set": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["Transform2D", "Velocity2D", "Sprite2D"]}
+    },
+    "expected_access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query", "reads", "writes"],
+      "properties": {
+        "query": {"$ref": "#/$defs/component_set"},
+        "reads": {"$ref": "#/$defs/component_set"},
+        "writes": {"$ref": "#/$defs/component_set"}
+      }
+    },
+    "system_common": {
+      "type": "object",
+      "required": ["id", "operation", "phase", "parameters"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "phase": {"enum": ["fixed_update", "post_update"]},
+        "after": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "expected_access": {"$ref": "#/$defs/expected_access"}
+      }
+    },
+    "system": {
+      "oneOf": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/system_common"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "operation", "phase", "parameters"],
+              "properties": {
+                "id": {"$ref": "#/$defs/id"},
+                "operation": {"const": "integrate_velocity"},
+                "phase": {"const": "fixed_update"},
+                "after": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+                "expected_access": {"$ref": "#/$defs/expected_access"},
+                "parameters": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["delta_seconds"],
+                  "properties": {"delta_seconds": {"type": "number", "exclusiveMinimum": 0}}
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/system_common"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "operation", "phase", "parameters"],
+              "properties": {
+                "id": {"$ref": "#/$defs/id"},
+                "operation": {"const": "wrap_bounds"},
+                "phase": {"enum": ["fixed_update", "post_update"]},
+                "after": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+                "expected_access": {"$ref": "#/$defs/expected_access"},
+                "parameters": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["bounds"],
+                  "properties": {"bounds": {"$ref": "#/$defs/bounds"}}
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,1 @@
+{"schema_version":"0.1","name":"bad_op","seed":1,"world":{"capacity":1},"camera":{"position":[0,0],"half_extent":[1,1]},"textures":[],"spawn_groups":[],"systems":[{"id":"bad","operation":"teleport_everything","phase":"fixed_update","parameters":{}}],"benchmark":{"runs":1,"warmup_frames":0,"measurement_frames":1}}

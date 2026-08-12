@@ -1,0 +1,17 @@
+{
+  "schema_version":"0.1","name":"texture_switching","seed":7,
+  "world":{"capacity":1000},"camera":{"position":[0,0],"half_extent":[16,9]},
+  "textures":[
+    {"id":"red","kind":"solid","width":2,"height":2,"color":[1,0.1,0.1,1]},
+    {"id":"green","kind":"solid","width":2,"height":2,"color":[0.1,1,0.1,1]},
+    {"id":"blue","kind":"solid","width":2,"height":2,"color":[0.1,0.1,1,1]},
+    {"id":"yellow","kind":"solid","width":2,"height":2,"color":[1,1,0.1,1]}
+  ],
+  "spawn_groups":[
+    {"id":"red_group","count":250,"placement":{"kind":"grid","origin":[-15,-8],"spacing":[1,1],"columns":32},"transform":{"scale":[0.4,0.4]},"sprite":{"texture":"red","size":[0.4,0.4],"layer":0}},
+    {"id":"green_group","count":250,"placement":{"kind":"grid","origin":[-14.75,-7.75],"spacing":[1,1],"columns":32},"transform":{"scale":[0.4,0.4]},"sprite":{"texture":"green","size":[0.4,0.4],"layer":0}},
+    {"id":"blue_group","count":250,"placement":{"kind":"grid","origin":[-14.5,-7.5],"spacing":[1,1],"columns":32},"transform":{"scale":[0.4,0.4]},"sprite":{"texture":"blue","size":[0.4,0.4],"layer":0}},
+    {"id":"yellow_group","count":250,"placement":{"kind":"grid","origin":[-14.25,-7.25],"spacing":[1,1],"columns":32},"transform":{"scale":[0.4,0.4]},"sprite":{"texture":"yellow","size":[0.4,0.4],"layer":0}}
+  ],
+  "systems":[],"benchmark":{"runs":3,"warmup_frames":30,"measurement_frames":200}
+}

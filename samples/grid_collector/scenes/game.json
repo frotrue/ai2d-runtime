@@ -1,0 +1,30 @@
+{
+  "schema_version":"0.3","id":"game","world":{"capacity":48},"camera":{"position":[3.5,3.5],"half_extent":[6,4.5]},
+  "collision":{"bounds":[-1.5,-1.5,9.5,9.5],"cell_size":[1,1],"max_colliders":48,"max_grid_references":512,"max_candidate_pairs":512,"max_impacts":4},
+  "grids":[{"id":"board","first_cell_center":[0,0],"cell_size":[1,1],"columns":8,"rows":8}],
+  "spawn_groups":[
+    {"id":"player","count":1,"active_count":1,"placement":{"kind":"grid","origin":[3,3],"spacing":[1,1],"columns":1},"velocity":{"linear":[0,0]},"sprite":{"texture":"sprites","size":[0.9,0.9],"uv":[0,0,0.25,1],"layer":20},"collider":{"half_extent":[0.4,0.4],"group":"player_hit","body":"dynamic"}},
+    {"id":"gem","count":1,"active_count":1,"placement":{"kind":"grid","origin":[4,3],"spacing":[1,1],"columns":1},"sprite":{"texture":"sprites","size":[0.8,0.8],"uv":[0.75,0,0.25,1],"layer":10},"collider":{"half_extent":[0.35,0.35],"group":"gem_hit","body":"static","trigger":true}},
+    {"id":"hazards","count":5,"active_count":0,"placement":{"kind":"grid","origin":[1,1],"spacing":[2,2],"columns":3},"sprite":{"texture":"sprites","size":[0.86,0.86],"uv":[0.5,0,0.25,1],"layer":12},"collider":{"half_extent":[0.38,0.38],"group":"hazard_hit","body":"static","trigger":true}},
+    {"id":"wall_bottom","count":8,"active_count":8,"placement":{"kind":"grid","origin":[0,-1],"spacing":[1,0],"columns":8},"collider":{"half_extent":[0.45,0.45],"group":"wall_hit","body":"static","trigger":true}},
+    {"id":"wall_top","count":8,"active_count":8,"placement":{"kind":"grid","origin":[0,8],"spacing":[1,0],"columns":8},"collider":{"half_extent":[0.45,0.45],"group":"wall_hit","body":"static","trigger":true}},
+    {"id":"wall_left","count":8,"active_count":8,"placement":{"kind":"grid","origin":[-1,0],"spacing":[0,1],"columns":1},"collider":{"half_extent":[0.45,0.45],"group":"wall_hit","body":"static","trigger":true}},
+    {"id":"wall_right","count":8,"active_count":8,"placement":{"kind":"grid","origin":[8,0],"spacing":[0,1],"columns":1},"collider":{"half_extent":[0.45,0.45],"group":"wall_hit","body":"static","trigger":true}}
+  ],
+  "systems":[{"id":"collector_motion","operation":"grid_motion","grid":"board","group":"player","step_interval_ticks":6,"initial_direction":"right","prevent_reverse":false},{"id":"collision","operation":"simulate_collisions"}],
+  "collision_rules":[{"id":"collect","a":"player_hit","b":"gem_hit","reactions":[]},{"id":"danger","a":"player_hit","b":"hazard_hit","reactions":[]},{"id":"boundary","a":"player_hit","b":"wall_hit","reactions":[]}],
+  "rules":[
+    {"id":"up","event":{"kind":"action_pressed","action":"up"},"actions":[{"kind":"queue_grid_direction","system":"collector_motion","direction":"up"}]},
+    {"id":"down","event":{"kind":"action_pressed","action":"down"},"actions":[{"kind":"queue_grid_direction","system":"collector_motion","direction":"down"}]},
+    {"id":"left","event":{"kind":"action_pressed","action":"left"},"actions":[{"kind":"queue_grid_direction","system":"collector_motion","direction":"left"}]},
+    {"id":"right","event":{"kind":"action_pressed","action":"right"},"actions":[{"kind":"queue_grid_direction","system":"collector_motion","direction":"right"}]},
+    {"id":"collect_gem","event":{"kind":"collision","rule":"collect"},"actions":[
+      {"kind":"add_int_state","state":"score","value":1},{"kind":"add_int_state","state":"hazard_count","value":1},
+      {"kind":"set_group_active_count","group":"hazards","count":{"state":"hazard_count"}},
+      {"kind":"relocate_to_free_cell","target":{"kind":"collision_b"},"grid":"board","occupied_groups":["player","hazards"],"result_state":"gem_available"}
+    ]},
+    {"id":"hazard_loss","event":{"kind":"collision","rule":"danger"},"actions":[{"kind":"set_int_state","state":"alive","value":0}]},
+    {"id":"wall_loss","event":{"kind":"collision","rule":"boundary"},"actions":[{"kind":"set_int_state","state":"alive","value":0}]}
+  ],
+  "ui":[{"id":"score","kind":"text","position":[200,35],"size":[360,45],"text":"COLLECTED: {score}","font":"font","color":[1,1,1,1],"layer":1000,"text_scale":2},{"id":"help","kind":"text","position":[690,35],"size":[440,45],"text":"GET 5 GEMS","font":"font","color":[1,0.85,0.35,1],"layer":1000,"text_scale":2}]
+}

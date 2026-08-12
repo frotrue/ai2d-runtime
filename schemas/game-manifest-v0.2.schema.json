@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai2d.local/schemas/game-manifest-v0.2.schema.json",
+  "title": "AI2D GameManifest 0.2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "name", "organization", "application", "window", "assets", "actions", "states", "scenes", "start_scene", "transitions"],
+  "properties": {
+    "schema_version": {"const": "0.2"},
+    "name": {"$ref": "#/$defs/id"},
+    "organization": {"$ref": "#/$defs/id"},
+    "application": {"$ref": "#/$defs/id"},
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "width", "height", "virtual_width", "virtual_height", "default_fps"],
+      "properties": {
+        "title": {"$ref": "#/$defs/id"},
+        "width": {"type": "integer", "minimum": 1, "maximum": 16384},
+        "height": {"type": "integer", "minimum": 1, "maximum": 16384},
+        "virtual_width": {"type": "integer", "minimum": 1, "maximum": 16384},
+        "virtual_height": {"type": "integer", "minimum": 1, "maximum": 16384},
+        "default_fps": {"$ref": "#/$defs/fps"}
+      }
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/asset"}
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/action"}
+    },
+    "states": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/state"}
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "path": {"$ref": "#/$defs/path"}
+        }
+      }
+    },
+    "start_scene": {"$ref": "#/$defs/id"},
+    "transitions": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/transition"}
+    },
+    "fps_actions": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action", "cap"],
+        "properties": {
+          "action": {"$ref": "#/$defs/id"},
+          "cap": {"$ref": "#/$defs/fps"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "fps": {"enum": ["60", "120", "144", "240", "unlimited"]},
+    "asset": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "path"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"},
+            "kind": {"enum": ["png", "wav"]},
+            "path": {"$ref": "#/$defs/path"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "path", "metadata"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"},
+            "kind": {"const": "font"},
+            "path": {"$ref": "#/$defs/path"},
+            "metadata": {"$ref": "#/$defs/path"}
+          }
+        }
+      ]
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "keys": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {"enum": ["escape", "left", "right", "up", "down", "a", "d", "space", "enter", "tab"]}
+        },
+        "mouse_left": {"type": "boolean"}
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "initial", "min", "max"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "initial": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+        "min": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+        "max": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}
+      }
+    },
+    "condition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "action"],
+          "properties": {"kind": {"const": "action_pressed"}, "action": {"$ref": "#/$defs/id"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "state", "value"],
+          "properties": {
+            "kind": {"enum": ["int_state_at_most", "int_state_at_least"]},
+            "state": {"$ref": "#/$defs/id"},
+            "value": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "group"],
+          "properties": {"kind": {"const": "group_inactive"}, "group": {"$ref": "#/$defs/id"}}
+        }
+      ]
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "condition", "to"],
+      "properties": {
+        "from": {"$ref": "#/$defs/id"},
+        "condition": {"$ref": "#/$defs/condition"},
+        "to": {"type": "string", "minLength": 1},
+        "reset_scene": {"type": "boolean"},
+        "reset_session": {"type": "boolean"}
+      }
+    }
+  }
+}

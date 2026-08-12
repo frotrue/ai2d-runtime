@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai2d.local/schemas/font-metadata-v1.schema.json",
+  "title": "AI2D Font Atlas Metadata 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "line_height", "glyphs"],
+  "properties": {
+    "schema_version": {"const": "1"},
+    "line_height": {"type": "number", "exclusiveMinimum": 0},
+    "glyphs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 65536,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["codepoint", "uv", "size", "advance"],
+        "properties": {
+          "codepoint": {"type": "integer", "minimum": 1, "maximum": 1114111},
+          "uv": {"$ref": "#/$defs/vec4"},
+          "size": {"$ref": "#/$defs/vec2"},
+          "bearing": {"$ref": "#/$defs/vec2"},
+          "advance": {"type": "number", "minimum": 0}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "vec2": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}], "items": false},
+    "vec4": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}, {"type": "number"}, {"type": "number"}], "items": false}
+  }
+}

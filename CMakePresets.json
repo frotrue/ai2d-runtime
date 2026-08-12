@@ -1,0 +1,116 @@
+{
+  "version": 8,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "23",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "BUILD_TESTING": "ON",
+        "AI2D_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "displayName": "Development",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "AI2D_ENABLE_ALLOCATION_TRACKING": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "AI2D_ENABLE_ALLOCATION_TRACKING": "ON"
+      }
+    },
+    {
+      "name": "asan",
+      "inherits": "base",
+      "displayName": "AddressSanitizer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "AI2D_ENABLE_ASAN": "ON",
+        "AI2D_ENABLE_ALLOCATION_TRACKING": "ON"
+      }
+    },
+    {
+      "name": "validation",
+      "inherits": "base",
+      "displayName": "Vulkan validation",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "AI2D_ENABLE_VULKAN_VALIDATION": "ON",
+        "AI2D_ENABLE_SYNC_VALIDATION": "ON",
+        "AI2D_ENABLE_ALLOCATION_TRACKING": "ON"
+      }
+    },
+    {
+      "name": "benchmark",
+      "inherits": "base",
+      "displayName": "Optimized benchmark",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "AI2D_ENABLE_VULKAN_VALIDATION": "OFF",
+        "AI2D_ENABLE_SYNC_VALIDATION": "OFF",
+        "AI2D_ENABLE_ASAN": "OFF",
+        "AI2D_ENABLE_UBSAN": "OFF",
+        "AI2D_ENABLE_ALLOCATION_TRACKING": "ON"
+      }
+    },
+    {
+      "name": "gpu-off",
+      "inherits": "base",
+      "displayName": "CPU-only / GPU disabled",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "AI2D_ENABLE_GPU": "OFF",
+        "AI2D_ENABLE_ALLOCATION_TRACKING": "ON"
+      }
+    },
+    {
+      "name": "package",
+      "inherits": "base",
+      "displayName": "Portable Windows package",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>",
+        "AI2D_ENABLE_VULKAN_VALIDATION": "OFF",
+        "AI2D_ENABLE_SYNC_VALIDATION": "OFF",
+        "AI2D_ENABLE_ASAN": "OFF",
+        "AI2D_ENABLE_UBSAN": "OFF",
+        "AI2D_ENABLE_ALLOCATION_TRACKING": "OFF",
+        "BUILD_TESTING": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "validation", "configurePreset": "validation" },
+    { "name": "benchmark", "configurePreset": "benchmark" },
+    { "name": "gpu-off", "configurePreset": "gpu-off" },
+    { "name": "package", "configurePreset": "package" }
+  ],
+  "testPresets": [
+    { "name": "dev", "configurePreset": "dev", "output": { "outputOnFailure": true } },
+    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
+    { "name": "asan", "configurePreset": "asan", "output": { "outputOnFailure": true } },
+    { "name": "validation", "configurePreset": "validation", "output": { "outputOnFailure": true } },
+    { "name": "benchmark", "configurePreset": "benchmark", "output": { "outputOnFailure": true } },
+    { "name": "gpu-off", "configurePreset": "gpu-off", "output": { "outputOnFailure": true } }
+  ]
+}
