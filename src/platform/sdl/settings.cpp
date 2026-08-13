@@ -1,5 +1,7 @@
 #include "ai2d/platform/settings.hpp"
 
+#include "ai2d/foundation/preference_path.hpp"
+
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -206,8 +208,7 @@ private:
 Result<std::filesystem::path> settings_file_path(
     const std::string_view organization,
     const std::string_view application) {
-    if (organization.empty() || application.empty() || organization.find('\0') != std::string_view::npos ||
-        application.find('\0') != std::string_view::npos) {
+    if (!safe_preference_component(organization) || !safe_preference_component(application)) {
         return std::unexpected(settings_error(DiagnosticCode::settings_invalid, "Preference names are invalid"));
     }
     const std::string organization_text{organization};

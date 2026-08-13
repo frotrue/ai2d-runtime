@@ -11,10 +11,24 @@ Every diagnostic contains `code`, `severity`, `subsystem`, `message`, a structur
 | `TOOL_VERSION_UNSUPPORTED` | A tool exists but cannot satisfy the required contract. |
 | `COMMAND_UNAVAILABLE` | A command implementation or its built binary is not present. |
 | `INPUT_INVALID` | CLI input is malformed independently of ScenarioSpec semantics. |
+| `GAME_MANIFEST_INVALID` | A GameManifest field, reference, version, or global bound is invalid. |
+| `GAME_SCENE_INVALID` | A SceneSpec field, reference, ordering rule, or scene bound is invalid. |
+| `GAME_POOL_INVALID` | A bounded pool declaration, target, ownership rule, or lifecycle action is invalid. |
 | `GAME_COLLISION_INTERACTION_INVALID` | A v0.5 solid/trigger body, reaction, event, capacity, or motion-ownership contract is invalid. |
+| `GAME_ANIMATION_INVALID` | A v0.6 animation clip, initial animation, target, action, or completion event is invalid. |
+| `GAME_PREFAB_INVALID` | A v0.6 prefab file, component, override, asset, or animation reference is invalid. |
+| `GAME_SAVE_INVALID` | A v0.6 save declaration, persistent-scene requirement, slot, state allowlist, or save action is invalid. |
+| `GAME_TILE_FIELD_INVALID` | A v0.6 tile layer, integer field, cell source, cell bound, or aggregate capacity is invalid. |
+| `GAME_INPUT_PROFILE_INVALID` | A v0.6 input profile, key/button/axis binding, deadzone, or profile action is invalid. |
+| `GAME_LOCALIZATION_INVALID` | A v0.6 locale table, key set, UTF-8 value, glyph, default locale, or locale action is invalid. |
+| `GAME_PRESENTATION_INVALID` | A v0.6 camera, UI anchor/stack, music action, or particle declaration is invalid. |
 | `GAME_TEST_ASSERTION_FAILED` | A compiled black-box assertion did not match its observed value. |
 | `GAME_TEST_NONDETERMINISTIC` | Fresh repeated verification runs produced different observations, final state, metrics, or checksums. |
+| `RUNTIME_POOL_STATE_INVALID` | Active/free order, lifetime, or snapshot data for a bounded pool is corrupt. |
 | `RUNTIME_CONTACT_STATE_INVALID` | A retained/runtime contact pair or lifecycle invariant is corrupt. |
+| `RUNTIME_ANIMATION_STATE_INVALID` | Active animation frame, phase, direction, entity, or restored snapshot state is corrupt. |
+| `RUNTIME_SAVE_STATE_INVALID` | Save I/O, header, length, checksum, plan hash, payload, or transactional restore validation failed. |
+| `RUNTIME_TILE_FIELD_STATE_INVALID` | Active tile/field storage or a restored cell snapshot violates its compiled shape/range. |
 | `COLLISION_CONTACT_CAPACITY_EXCEEDED` | Fixed contact, event, or motion-segment storage could not accept more data. |
 | `IR_SCHEMA_INVALID` | ScenarioSpec shape/type/required field is invalid. |
 | `IR_SCHEMA_VERSION_UNSUPPORTED` | `schema_version` is not supported. |

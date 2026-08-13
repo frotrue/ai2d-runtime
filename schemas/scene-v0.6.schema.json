@@ -1,0 +1,2440 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai2d.local/schemas/scene-v0.6.schema.json",
+  "title": "AI2D SceneSpec 0.6",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "world",
+    "camera",
+    "grids",
+    "spawn_groups",
+    "pools",
+    "systems"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.6"
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "world": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capacity"
+      ],
+      "properties": {
+        "capacity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "half_extent"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "fixed",
+            "follow"
+          ]
+        },
+        "position": {
+          "$ref": "#/$defs/vec2"
+        },
+        "half_extent": {
+          "$ref": "#/$defs/positive_vec2"
+        },
+        "target": {
+          "$ref": "#/$defs/camera_target"
+        },
+        "offset": {
+          "$ref": "#/$defs/vec2"
+        },
+        "bounds": {
+          "$ref": "#/$defs/vec4"
+        },
+        "pixel_snap": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [{
+        "if": {"properties": {"mode": {"const": "follow"}}, "required": ["mode"]},
+        "then": {"required": ["target"]},
+        "else": {"not": {"required": ["target"]}}
+      }]
+    },
+    "collision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bounds": {
+          "$ref": "#/$defs/vec4"
+        },
+        "cell_size": {
+          "$ref": "#/$defs/positive_vec2"
+        },
+        "max_colliders": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "max_grid_references": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "max_candidate_pairs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "max_contact_pairs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "max_impacts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        }
+      }
+    },
+    "grids": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/grid"
+      }
+    },
+    "spawn_groups": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "$ref": "#/$defs/spawn"
+      }
+    },
+    "pools": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "$ref": "#/$defs/pool"
+      }
+    },
+    "systems": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/system"
+      }
+    },
+    "collision_rules": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/collision_rule"
+      }
+    },
+    "rules": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    },
+    "ui": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "$ref": "#/$defs/ui"
+      }
+    },
+    "tile_layers": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/tile_layer"
+      }
+    },
+    "fields": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/field"
+      }
+    },
+    "particle_emitters": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/particle_emitter"
+      }
+    },
+    "ui_stacks": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/ui_stack"
+      }
+    },
+    "persistent": {
+      "type": "boolean"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "collision_rules"
+        ],
+        "properties": {
+          "collision_rules": {
+            "contains": {
+              "type": "object",
+              "required": [
+                "interaction"
+              ],
+              "properties": {
+                "interaction": {
+                  "const": "trigger"
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "collision"
+        ],
+        "properties": {
+          "collision": {
+            "required": [
+              "max_contact_pairs"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "number": {
+      "type": "number",
+      "minimum": -3.4028234663852886e+38,
+      "maximum": 3.4028234663852886e+38
+    },
+    "vec2": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/number"
+        },
+        {
+          "$ref": "#/$defs/number"
+        }
+      ],
+      "items": false
+    },
+    "positive_vec2": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 3.4028234663852886e+38
+        },
+        {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 3.4028234663852886e+38
+        }
+      ],
+      "items": false
+    },
+    "vec4": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/number"
+        },
+        {
+          "$ref": "#/$defs/number"
+        },
+        {
+          "$ref": "#/$defs/number"
+        },
+        {
+          "$ref": "#/$defs/number"
+        }
+      ],
+      "items": false
+    },
+    "color": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      ],
+      "items": false
+    },
+    "direction": {
+      "enum": [
+        "up",
+        "down",
+        "left",
+        "right"
+      ]
+    },
+    "comparison": {
+      "enum": [
+        "eq",
+        "ne",
+        "lt",
+        "le",
+        "gt",
+        "ge"
+      ]
+    },
+    "grid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "first_cell_center",
+        "cell_size",
+        "columns",
+        "rows"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "first_cell_center": {
+          "$ref": "#/$defs/vec2"
+        },
+        "cell_size": {
+          "$ref": "#/$defs/positive_vec2"
+        },
+        "columns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "origin",
+        "spacing",
+        "columns"
+      ],
+      "properties": {
+        "kind": {
+          "const": "grid"
+        },
+        "origin": {
+          "$ref": "#/$defs/vec2"
+        },
+        "spacing": {
+          "$ref": "#/$defs/vec2"
+        },
+        "columns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        }
+      }
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "position_offset": {
+          "$ref": "#/$defs/vec2"
+        },
+        "rotation": {
+          "$ref": "#/$defs/number"
+        },
+        "scale": {
+          "$ref": "#/$defs/positive_vec2"
+        }
+      }
+    },
+    "velocity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "linear": {
+          "$ref": "#/$defs/vec2"
+        },
+        "angular": {
+          "$ref": "#/$defs/number"
+        }
+      }
+    },
+    "sprite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "texture",
+        "size"
+      ],
+      "properties": {
+        "texture": {
+          "$ref": "#/$defs/id"
+        },
+        "size": {
+          "$ref": "#/$defs/positive_vec2"
+        },
+        "pivot": {
+          "$ref": "#/$defs/vec2"
+        },
+        "uv": {
+          "$ref": "#/$defs/vec4"
+        },
+        "tint": {
+          "$ref": "#/$defs/color"
+        },
+        "layer": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
+        "visible": {
+          "type": "boolean"
+        }
+      }
+    },
+    "collider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "half_extent",
+        "group",
+        "body"
+      ],
+      "properties": {
+        "offset": {
+          "$ref": "#/$defs/vec2"
+        },
+        "half_extent": {
+          "$ref": "#/$defs/positive_vec2"
+        },
+        "group": {
+          "$ref": "#/$defs/id"
+        },
+        "body": {
+          "enum": [
+            "static",
+            "kinematic",
+            "dynamic"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "spawn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "count",
+        "placement"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "active_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "placement": {
+          "$ref": "#/$defs/placement"
+        },
+        "transform": {
+          "$ref": "#/$defs/transform"
+        },
+        "velocity": {
+          "$ref": "#/$defs/velocity"
+        },
+        "sprite": {
+          "$ref": "#/$defs/sprite"
+        },
+        "collider": {
+          "$ref": "#/$defs/collider"
+        },
+        "prefab": {
+          "$ref": "#/$defs/id"
+        },
+        "animation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "clip"
+          ],
+          "properties": {
+            "clip": {
+              "$ref": "#/$defs/id"
+            },
+            "autoplay": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "pool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "group",
+        "on_exhausted"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "group": {
+          "$ref": "#/$defs/id"
+        },
+        "on_exhausted": {
+          "enum": [
+            "skip",
+            "recycle_oldest"
+          ]
+        }
+      }
+    },
+    "system": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "operation",
+            "group",
+            "negative_action",
+            "positive_action",
+            "speed",
+            "min",
+            "max"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "operation": {
+              "const": "axis_control"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            },
+            "negative_action": {
+              "$ref": "#/$defs/id"
+            },
+            "positive_action": {
+              "$ref": "#/$defs/id"
+            },
+            "speed": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 3.4028234663852886e+38
+            },
+            "min": {
+              "$ref": "#/$defs/number"
+            },
+            "max": {
+              "$ref": "#/$defs/number"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "operation",
+            "group",
+            "action",
+            "velocity"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "operation": {
+              "const": "set_velocity_on_press"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            },
+            "action": {
+              "$ref": "#/$defs/id"
+            },
+            "velocity": {
+              "$ref": "#/$defs/vec2"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "operation"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "operation": {
+              "const": "simulate_collisions"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "operation",
+            "grid",
+            "group",
+            "step_interval_ticks",
+            "initial_direction",
+            "prevent_reverse"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "operation": {
+              "const": "grid_motion"
+            },
+            "grid": {
+              "$ref": "#/$defs/id"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            },
+            "step_interval_ticks": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "initial_direction": {
+              "$ref": "#/$defs/direction"
+            },
+            "prevent_reverse": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "operation",
+            "leader",
+            "followers",
+            "motion_system"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "operation": {
+              "const": "follow_transform_chain"
+            },
+            "leader": {
+              "$ref": "#/$defs/id"
+            },
+            "followers": {
+              "$ref": "#/$defs/id"
+            },
+            "motion_system": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "operation",
+            "spawn_group"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "operation": {
+              "const": "linear_motion"
+            },
+            "spawn_group": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        }
+      ]
+    },
+    "reaction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "target"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "reflect",
+                "deactivate"
+              ]
+            },
+            "target": {
+              "enum": [
+                "a",
+                "b"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "state",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "add_int_state"
+            },
+            "state": {
+              "$ref": "#/$defs/id"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "group"
+          ],
+          "properties": {
+            "kind": {
+              "const": "reset_group"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "asset"
+          ],
+          "properties": {
+            "kind": {
+              "const": "play_sound"
+            },
+            "asset": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        }
+      ]
+    },
+    "collision_rule": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "a",
+            "b",
+            "interaction",
+            "reactions"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "a": {
+              "$ref": "#/$defs/id"
+            },
+            "b": {
+              "$ref": "#/$defs/id"
+            },
+            "interaction": {
+              "const": "trigger"
+            },
+            "reactions": {
+              "type": "array",
+              "maxItems": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "a",
+            "b",
+            "interaction",
+            "reactions"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "a": {
+              "$ref": "#/$defs/id"
+            },
+            "b": {
+              "$ref": "#/$defs/id"
+            },
+            "interaction": {
+              "const": "solid"
+            },
+            "reactions": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "contains": {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "reflect"
+                  }
+                }
+              },
+              "items": {
+                "$ref": "#/$defs/reaction"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "scene_enter"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "action"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "action_pressed",
+                "action_released"
+              ]
+            },
+            "action": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "interval_ticks"
+          ],
+          "properties": {
+            "kind": {
+              "const": "fixed_interval"
+            },
+            "interval_ticks": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "rule"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "collision",
+                "contact_begin",
+                "contact_end"
+              ]
+            },
+            "rule": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "animation"
+          ],
+          "properties": {
+            "kind": {
+              "const": "animation_finished"
+            },
+            "animation": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        }
+      ]
+    },
+    "condition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "state",
+            "op",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "int_state"
+            },
+            "state": {
+              "$ref": "#/$defs/id"
+            },
+            "op": {
+              "$ref": "#/$defs/comparison"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "group",
+            "op",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "group_active_count"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            },
+            "op": {
+              "$ref": "#/$defs/comparison"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "layer",
+            "op",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "tile_value"
+            },
+            "layer": {
+              "$ref": "#/$defs/id"
+            },
+            "op": {
+              "$ref": "#/$defs/comparison"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999999
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999999
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "x",
+                "y"
+              ]
+            },
+            {
+              "required": [
+                "target"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "field",
+            "op",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "field_value"
+            },
+            "field": {
+              "$ref": "#/$defs/id"
+            },
+            "op": {
+              "$ref": "#/$defs/comparison"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999999
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999999
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "x",
+                "y"
+              ]
+            },
+            {
+              "required": [
+                "target"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "group"
+          ],
+          "properties": {
+            "kind": {
+              "const": "group"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "group",
+            "index"
+          ],
+          "properties": {
+            "kind": {
+              "const": "index"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "collision_a",
+                "collision_b"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "event_entity"
+            }
+          }
+        }
+      ]
+    },
+    "collision_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "collision_a",
+            "collision_b"
+          ]
+        }
+      }
+    },
+    "pool_single_target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "group",
+            "index"
+          ],
+          "properties": {
+            "kind": {
+              "const": "index"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "collision_a",
+                "collision_b"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "pool_position": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "initial"
+            },
+            "offset": {
+              "$ref": "#/$defs/vec2"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "constant"
+            },
+            "value": {
+              "$ref": "#/$defs/vec2"
+            },
+            "offset": {
+              "$ref": "#/$defs/vec2"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "target"
+          ],
+          "properties": {
+            "kind": {
+              "const": "target"
+            },
+            "target": {
+              "$ref": "#/$defs/pool_single_target"
+            },
+            "offset": {
+              "$ref": "#/$defs/vec2"
+            }
+          }
+        }
+      ]
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "state",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "set_int_state",
+                "add_int_state"
+              ]
+            },
+            "state": {
+              "$ref": "#/$defs/id"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "target"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "activate",
+                "deactivate"
+              ]
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "group",
+            "count"
+          ],
+          "properties": {
+            "kind": {
+              "const": "set_group_active_count"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            },
+            "count": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "state"
+                  ],
+                  "properties": {
+                    "state": {
+                      "$ref": "#/$defs/id"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "target",
+            "velocity"
+          ],
+          "properties": {
+            "kind": {
+              "const": "set_velocity"
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            },
+            "velocity": {
+              "$ref": "#/$defs/vec2"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "system",
+            "direction"
+          ],
+          "properties": {
+            "kind": {
+              "const": "queue_grid_direction"
+            },
+            "system": {
+              "$ref": "#/$defs/id"
+            },
+            "direction": {
+              "$ref": "#/$defs/direction"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "group"
+          ],
+          "properties": {
+            "kind": {
+              "const": "reset_group"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "asset"
+          ],
+          "properties": {
+            "kind": {
+              "const": "play_sound"
+            },
+            "asset": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "target",
+            "grid",
+            "occupied_groups"
+          ],
+          "properties": {
+            "kind": {
+              "const": "relocate_to_free_cell"
+            },
+            "target": {
+              "$ref": "#/$defs/collision_target"
+            },
+            "grid": {
+              "$ref": "#/$defs/id"
+            },
+            "occupied_groups": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/id"
+              }
+            },
+            "result_state": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "pool",
+            "position"
+          ],
+          "properties": {
+            "kind": {
+              "const": "spawn_from_pool"
+            },
+            "pool": {
+              "$ref": "#/$defs/id"
+            },
+            "position": {
+              "$ref": "#/$defs/pool_position"
+            },
+            "velocity": {
+              "$ref": "#/$defs/vec2"
+            },
+            "rotation": {
+              "$ref": "#/$defs/number"
+            },
+            "lifetime_ticks": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "result_state": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "pool",
+            "target"
+          ],
+          "properties": {
+            "kind": {
+              "const": "release_to_pool"
+            },
+            "pool": {
+              "$ref": "#/$defs/id"
+            },
+            "target": {
+              "$ref": "#/$defs/pool_single_target"
+            },
+            "result_state": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "pool"
+          ],
+          "properties": {
+            "kind": {
+              "const": "reset_pool"
+            },
+            "pool": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "target",
+            "animation"
+          ],
+          "properties": {
+            "kind": {
+              "const": "play_animation"
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            },
+            "animation": {
+              "$ref": "#/$defs/id"
+            },
+            "restart": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "target"
+          ],
+          "properties": {
+            "kind": {
+              "const": "stop_animation"
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "layer",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "set_tile"
+            },
+            "layer": {
+              "$ref": "#/$defs/id"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999999
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999999
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            },
+            "result_state": {
+              "$ref": "#/$defs/id"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "x",
+                "y"
+              ]
+            },
+            {
+              "required": [
+                "target"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "field",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "set_field",
+                "add_field"
+              ]
+            },
+            "field": {
+              "$ref": "#/$defs/id"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999999
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999999
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            },
+            "result_state": {
+              "$ref": "#/$defs/id"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "x",
+                "y"
+              ]
+            },
+            {
+              "required": [
+                "target"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "slot"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "save_slot",
+                "load_slot",
+                "delete_slot"
+              ]
+            },
+            "slot": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 15
+            },
+            "result_state": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "amplitude",
+            "duration_ticks"
+          ],
+          "properties": {
+            "kind": {
+              "const": "camera_shake"
+            },
+            "amplitude": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000
+            },
+            "duration_ticks": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "zoom"
+          ],
+          "properties": {
+            "kind": {
+              "const": "set_camera_zoom"
+            },
+            "zoom": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 10
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "locale"
+          ],
+          "properties": {
+            "kind": {
+              "const": "set_locale"
+            },
+            "locale": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "profile"
+          ],
+          "properties": {
+            "kind": {
+              "const": "set_input_profile"
+            },
+            "profile": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "asset"
+          ],
+          "properties": {
+            "kind": {
+              "const": "play_music"
+            },
+            "asset": {
+              "$ref": "#/$defs/id"
+            },
+            "loop": {
+              "type": "boolean"
+            },
+            "fade_ticks": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "volume": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "stop_music"
+            },
+            "fade_ticks": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "volume"
+          ],
+          "properties": {
+            "kind": {
+              "const": "set_music_volume"
+            },
+            "volume": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "fade_ticks": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "emitter",
+            "particles",
+            "position"
+          ],
+          "properties": {
+            "kind": {
+              "const": "emit_particles"
+            },
+            "emitter": {
+              "$ref": "#/$defs/id"
+            },
+            "particles": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "position": {
+              "$ref": "#/$defs/particle_position"
+            }
+          }
+        }
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "event",
+        "actions"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "event": {
+          "$ref": "#/$defs/event"
+        },
+        "conditions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/condition"
+          }
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        }
+      }
+    },
+    "ui": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "position",
+            "size"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "kind": {
+              "const": "panel"
+            },
+            "position": {
+              "$ref": "#/$defs/vec2"
+            },
+            "size": {
+              "$ref": "#/$defs/positive_vec2"
+            },
+            "color": {
+              "$ref": "#/$defs/color"
+            },
+            "hover_color": {
+              "$ref": "#/$defs/color"
+            },
+            "layer": {
+              "type": "integer"
+            },
+            "text_scale": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 16
+            },
+            "anchor": {
+              "$ref": "#/$defs/anchor"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "position",
+            "size",
+            "font"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "kind": {
+              "const": "text"
+            },
+            "position": {
+              "$ref": "#/$defs/vec2"
+            },
+            "size": {
+              "$ref": "#/$defs/positive_vec2"
+            },
+            "text": {
+              "$ref": "#/$defs/id"
+            },
+            "font": {
+              "$ref": "#/$defs/id"
+            },
+            "color": {
+              "$ref": "#/$defs/color"
+            },
+            "hover_color": {
+              "$ref": "#/$defs/color"
+            },
+            "text_color": {
+              "$ref": "#/$defs/color"
+            },
+            "layer": {
+              "type": "integer"
+            },
+            "text_scale": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 16
+            },
+            "anchor": {
+              "$ref": "#/$defs/anchor"
+            },
+            "text_key": {
+              "$ref": "#/$defs/id"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "text"
+              ]
+            },
+            {
+              "required": [
+                "text_key"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "position",
+            "size",
+            "font",
+            "action"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "kind": {
+              "const": "button"
+            },
+            "position": {
+              "$ref": "#/$defs/vec2"
+            },
+            "size": {
+              "$ref": "#/$defs/positive_vec2"
+            },
+            "text": {
+              "$ref": "#/$defs/id"
+            },
+            "font": {
+              "$ref": "#/$defs/id"
+            },
+            "action": {
+              "$ref": "#/$defs/id"
+            },
+            "color": {
+              "$ref": "#/$defs/color"
+            },
+            "hover_color": {
+              "$ref": "#/$defs/color"
+            },
+            "text_color": {
+              "$ref": "#/$defs/color"
+            },
+            "layer": {
+              "type": "integer"
+            },
+            "text_scale": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 16
+            },
+            "anchor": {
+              "$ref": "#/$defs/anchor"
+            },
+            "text_key": {
+              "$ref": "#/$defs/id"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "text"
+              ]
+            },
+            {
+              "required": [
+                "text_key"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "camera_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["group", "index"],
+      "properties": {
+        "group": {"$ref": "#/$defs/id"},
+        "index": {"type": "integer", "minimum": 0}
+      }
+    },
+    "anchor": {
+      "enum": [
+        "top_left",
+        "top",
+        "top_right",
+        "left",
+        "center",
+        "right",
+        "bottom_left",
+        "bottom",
+        "bottom_right"
+      ]
+    },
+    "presentation_sprite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "texture",
+        "size"
+      ],
+      "properties": {
+        "texture": {
+          "$ref": "#/$defs/id"
+        },
+        "size": {
+          "$ref": "#/$defs/positive_vec2"
+        },
+        "pivot": {
+          "$ref": "#/$defs/vec2"
+        },
+        "uv": {
+          "$ref": "#/$defs/vec4"
+        },
+        "tint": {
+          "$ref": "#/$defs/color"
+        },
+        "layer": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
+        "visible": {
+          "type": "boolean"
+        }
+      }
+    },
+    "tile_layer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "grid",
+        "texture",
+        "atlas_columns",
+        "atlas_rows"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "grid": {
+          "$ref": "#/$defs/id"
+        },
+        "texture": {
+          "$ref": "#/$defs/id"
+        },
+        "atlas_columns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "atlas_rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "fill": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "cells": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          }
+        },
+        "tint": {
+          "$ref": "#/$defs/color"
+        },
+        "layer": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
+        "visible": {
+          "type": "boolean"
+        }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "grid",
+        "min",
+        "max"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "grid": {
+          "$ref": "#/$defs/id"
+        },
+        "min": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "max": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "initial": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "cells": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "type": "integer",
+            "minimum": -2147483648,
+            "maximum": 2147483647
+          }
+        }
+      }
+    },
+    "particle_emitter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "capacity",
+        "on_exhausted",
+        "sprite",
+        "lifetime_ticks"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "capacity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "on_exhausted": {
+          "enum": [
+            "skip",
+            "recycle_oldest"
+          ]
+        },
+        "sprite": {
+          "$ref": "#/$defs/presentation_sprite"
+        },
+        "lifetime_ticks": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          ],
+          "items": false
+        },
+        "velocity_min": {
+          "$ref": "#/$defs/vec2"
+        },
+        "velocity_max": {
+          "$ref": "#/$defs/vec2"
+        }
+      }
+    },
+    "ui_stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "direction",
+        "position",
+        "size",
+        "children"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "direction": {
+          "enum": [
+            "horizontal",
+            "vertical"
+          ]
+        },
+        "position": {
+          "$ref": "#/$defs/vec2"
+        },
+        "size": {
+          "$ref": "#/$defs/positive_vec2"
+        },
+        "padding": {
+          "$ref": "#/$defs/vec2"
+        },
+        "spacing": {
+          "type": "number",
+          "minimum": 0
+        },
+        "anchor": {
+          "$ref": "#/$defs/anchor"
+        },
+        "children": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        }
+      }
+    },
+    "particle_position": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "constant"
+            },
+            "value": {
+              "$ref": "#/$defs/vec2"
+            },
+            "offset": {
+              "$ref": "#/$defs/vec2"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "target"
+          ],
+          "properties": {
+            "kind": {
+              "const": "target"
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            },
+            "offset": {
+              "$ref": "#/$defs/vec2"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

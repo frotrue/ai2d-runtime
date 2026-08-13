@@ -774,7 +774,7 @@ def input_schema_version(path: Path) -> str | None:
 
 
 def is_game_schema(path: Path) -> bool:
-    return input_schema_version(path) in {"0.2", "0.3", "0.4", "0.5"}
+    return input_schema_version(path) in {"0.2", "0.3", "0.4", "0.5", "0.6"}
 
 
 def forward_runtime(
@@ -862,7 +862,7 @@ def command_run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
                         "INPUT_INVALID",
                         "error",
                         "cli",
-                        "--input-script is supported only for GameManifest 0.2 through 0.5",
+                        "--input-script is supported only for GameManifest 0.2 through 0.6",
                         context={"input": str(arguments.scenario)},
                     )
                 ],
@@ -1072,7 +1072,12 @@ def package_decoded_asset_bytes(
         asset_id = asset.get("id")
         kind = asset.get("kind")
         raw_path = asset.get("path")
-        if not isinstance(asset_id, str) or not asset_id or kind not in {"png", "font", "wav"} or not isinstance(raw_path, str):
+        if (
+            not isinstance(asset_id, str)
+            or not asset_id
+            or kind not in {"png", "font", "wav", "music"}
+            or not isinstance(raw_path, str)
+        ):
             raise PackageAssetValidationError("Game inspection contains invalid asset metadata", {"index": index})
         supplied = Path(raw_path)
         if not supplied.is_absolute():
@@ -1093,8 +1098,9 @@ def package_decoded_asset_bytes(
                 "Inspected asset is absent from the package dependency list",
                 {"asset": asset_id, "path": raw_path},
             )
-        decoded = wav_decoded_bytes(source) if kind == "wav" else png_decoded_bytes(source)
-        if aggregate > MAXIMUM_PACKAGE_DECODED_ASSET_BYTES - decoded:
+        decoded = wav_decoded_bytes(source) if kind in {"wav", "music"} else png_decoded_bytes(source)
+        resident = 0 if kind == "music" else decoded
+        if aggregate > MAXIMUM_PACKAGE_DECODED_ASSET_BYTES - resident:
             raise PackageAssetValidationError(
                 "Aggregate decoded startup assets exceed the package limit",
                 {
@@ -1104,7 +1110,7 @@ def package_decoded_asset_bytes(
                     "maximum_decoded_asset_bytes": MAXIMUM_PACKAGE_DECODED_ASSET_BYTES,
                 },
             )
-        aggregate += decoded
+        aggregate += resident
     return aggregate
 
 
@@ -1196,7 +1202,7 @@ def command_package(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]
                         "COMMAND_UNAVAILABLE",
                         "error",
                         "package",
-                        "The v0.5 package target currently supports Windows x64 only",
+                        "The v0.6 package target currently supports Windows x64 only",
                         context={"os": os.name},
                     )
                 ],
@@ -1215,7 +1221,7 @@ def command_package(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]
                         "INPUT_INVALID",
                         "error",
                         "package",
-                        "Package input must be a readable GameManifest 0.2 through 0.5 file",
+                        "Package input must be a readable GameManifest 0.2 through 0.6 file",
                         context={"manifest": str(manifest)},
                     )
                 ],
@@ -1285,7 +1291,7 @@ def command_package(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]
     dependencies = metrics.get("dependencies")
     inspected_assets = metrics.get("assets")
     windows_reserved_names = {"CON", "PRN", "AUX", "NUL", *(f"COM{index}" for index in range(1, 10)), *(f"LPT{index}" for index in range(1, 10))}
-    if schema not in {"0.2", "0.3", "0.4", "0.5"} or not isinstance(application, str) or not re.fullmatch(
+    if schema not in {"0.2", "0.3", "0.4", "0.5", "0.6"} or not isinstance(application, str) or not re.fullmatch(
         r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", application
     ) or application.split(".", 1)[0].upper() in windows_reserved_names:
         return (
@@ -1548,7 +1554,7 @@ def command_package(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
         (staging / "README.txt").write_text(
-            "AI2D v0.5 portable Windows package\n\n"
+            "AI2D v0.6 portable Windows package\n\n"
             f"Run {application}.exe from this directory.\n"
             "The content directory must remain beside the executable.\n"
             "A Vulkan 1.3-capable GPU, current vendor driver, and system Vulkan loader are required.\n"

@@ -1,0 +1,23 @@
+{
+  "schema_version": "1",
+  "frames": 24,
+  "events": [
+    {"tick": 2, "action": "burst", "kind": "tap"},
+    {"tick": 6, "action": "move_right", "kind": "press"},
+    {"tick": 12, "action": "move_right", "kind": "release"},
+    {"tick": 14, "action": "alternate_locale", "kind": "tap"},
+    {"tick": 16, "action": "gamepad_profile", "kind": "tap"}
+  ],
+  "assertions": [
+    {"tick": 2, "kind": "int_state", "state": "score", "op": "eq", "value": 1},
+    {"tick": 2, "kind": "tile_value", "scene": "lab", "layer": "floor", "x": 4, "y": 1, "op": "eq", "value": 2},
+    {"tick": 2, "kind": "field_value", "scene": "lab", "field": "energy", "x": 4, "y": 1, "op": "eq", "value": 5},
+    {"tick": 3, "kind": "runtime_metric", "metric": "particle_emits", "op": "eq", "value": 4},
+    {"tick": 6, "kind": "runtime_metric", "metric": "animation_completions", "op": "ge", "value": 1},
+    {"tick": 12, "kind": "position", "scene": "lab", "group": "player", "index": 0, "expected": [0.6, 0], "tolerance": 0.0001},
+    {"tick": 14, "kind": "runtime_metric", "metric": "locale_switches", "op": "eq", "value": 1},
+    {"tick": 16, "kind": "runtime_metric", "metric": "input_profile_switches", "op": "eq", "value": 1},
+    {"tick": 20, "kind": "animation_frame", "scene": "lab", "group": "player", "index": 0, "op": "le", "value": 1},
+    {"tick": 20, "kind": "runtime_metric", "metric": "camera_follow_updates", "op": "ge", "value": 20}
+  ]
+}

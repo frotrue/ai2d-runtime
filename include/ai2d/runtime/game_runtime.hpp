@@ -7,6 +7,7 @@
 #include "ai2d/world/collision.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -25,6 +26,7 @@ struct GameRuntimeOptions final {
     bool enable_synchronization_validation{false};
     bool has_fps_override{false};
     RenderFpsCap fps_override{RenderFpsCap::fps_60};
+    std::filesystem::path save_directory_override{};
 };
 
 struct GameRuntimeLoadMetrics final {
@@ -82,6 +84,28 @@ struct GameRuntimeFrameMetrics final {
     std::uint32_t peak_contact_pairs{0U};
     std::uint32_t active_pooled_entities{0U};
     std::uint32_t peak_active_pooled_entities{0U};
+    std::uint64_t animation_frame_updates{0U};
+    std::uint64_t animation_completions{0U};
+    std::uint64_t tile_reads{0U};
+    std::uint64_t tile_writes{0U};
+    std::uint64_t field_reads{0U};
+    std::uint64_t field_writes{0U};
+    std::uint64_t save_attempts{0U};
+    std::uint64_t save_successes{0U};
+    std::uint64_t save_failures{0U};
+    std::uint64_t save_bytes{0U};
+    std::uint64_t particle_emits{0U};
+    std::uint64_t particle_updates{0U};
+    std::uint64_t particle_exhaustions{0U};
+    std::uint64_t particle_slot_operations{0U};
+    std::uint32_t peak_active_particles{0U};
+    std::uint64_t camera_follow_updates{0U};
+    std::uint64_t camera_shake_updates{0U};
+    std::uint64_t music_stream_bytes{0U};
+    std::uint64_t music_underruns{0U};
+    std::uint64_t input_profile_switches{0U};
+    std::uint64_t locale_switches{0U};
+    std::uint64_t localized_text_resolutions{0U};
     double state_checksum{0.0};
     double scene_state_checksum{0.0};
 };
@@ -121,6 +145,13 @@ public:
     [[nodiscard]] Result<bool> entity_active(std::uint32_t spawn_group_index, std::uint32_t item_index) const;
     [[nodiscard]] Result<Vec2> entity_position(std::uint32_t spawn_group_index, std::uint32_t item_index) const;
     [[nodiscard]] Result<Vec2> entity_velocity(std::uint32_t spawn_group_index, std::uint32_t item_index) const;
+    [[nodiscard]] Result<std::uint32_t> animation_frame(
+        std::uint32_t spawn_group_index, std::uint32_t item_index) const;
+    [[nodiscard]] Result<std::uint32_t> tile_value(
+        std::uint32_t tile_layer_index, std::uint32_t x, std::uint32_t y) const;
+    [[nodiscard]] Result<std::int32_t> field_value(
+        std::uint32_t field_index, std::uint32_t x, std::uint32_t y) const;
+    [[nodiscard]] Vec2 camera_position() const noexcept;
     [[nodiscard]] std::uint32_t current_scene_index() const noexcept;
     [[nodiscard]] std::uint64_t contact_state_checksum() const noexcept;
     [[nodiscard]] std::string_view current_scene() const noexcept;

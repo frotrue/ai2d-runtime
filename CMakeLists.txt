@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(game_runtime_dev VERSION 0.5.0 LANGUAGES CXX)
+project(game_runtime_dev VERSION 0.6.0 LANGUAGES CXX)
 
 option(AI2D_ENABLE_ASAN "Enable AddressSanitizer for project targets" OFF)
 option(AI2D_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer where supported" OFF)
@@ -264,6 +264,14 @@ if(BUILD_TESTING)
     add_test(NAME v05_motion_contact_contract
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_v05_samples.py"
             ${AI2D_V05_SAMPLE_TEST_ARGS}
+    )
+    set(AI2D_V06_SAMPLE_TEST_ARGS $<TARGET_FILE:ai2d_cli> "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(AI2D_ENABLE_GPU)
+        list(APPEND AI2D_V06_SAMPLE_TEST_ARGS --gpu)
+    endif()
+    add_test(NAME v06_content_foundations_contract
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_v06_samples.py"
+            ${AI2D_V06_SAMPLE_TEST_ARGS}
     )
     add_test(NAME cli_help_contract
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_cli_help.py" $<TARGET_FILE:ai2d_cli>

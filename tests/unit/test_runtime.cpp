@@ -5,12 +5,15 @@
 #include "ai2d/scenario/scenario.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -21,6 +24,8 @@ const std::filesystem::path projectile_arena_manifest{AI2D_SOURCE_DIR "/samples/
 const std::filesystem::path timed_pickups_manifest{AI2D_SOURCE_DIR "/samples/timed_pickups/game.json"};
 const std::filesystem::path pool_siege_manifest{AI2D_SOURCE_DIR "/samples/pool_siege/game.json"};
 const std::filesystem::path contact_course_manifest{AI2D_SOURCE_DIR "/samples/contact_course/game.json"};
+const std::filesystem::path content_foundations_manifest{
+    AI2D_SOURCE_DIR "/samples/content_foundations/game.json"};
 
 } // namespace
 
@@ -972,4 +977,768 @@ TEST_CASE("Pool release and immediate reuse invalidates later contacts from the 
     CHECK(frame->pool_acquire_successes == 1U);
     REQUIRE(runtime.state_value(0U));
     CHECK(*runtime.state_value(0U) == 1);
+}
+
+TEST_CASE("Bounded content foundations churn without measured fixed-tick allocation") {
+    const auto plan = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(plan);
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(*plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan->actions.size());
+    for (std::uint32_t tick = 0U; tick < 8U; ++tick) {
+        std::fill(actions.begin(), actions.end(), ai2d::GameActionInput{});
+        REQUIRE(runtime.run_exact_actions(actions, 1U));
+    }
+
+    std::uint64_t animation_updates = 0U;
+    std::uint64_t particle_updates = 0U;
+    std::uint64_t camera_updates = 0U;
+    bool frames_ok = true;
+    ai2d::MeasuredAllocationScope measured{};
+    for (std::uint32_t tick = 0U; tick < 120U; ++tick) {
+        std::fill(actions.begin(), actions.end(), ai2d::GameActionInput{});
+        if (tick % 20U == 0U) actions[2U].pressed = true;
+        if (tick == 1U) actions[1U].pressed = true;
+        if (tick == 60U) actions[1U].released = true;
+        const auto frame = runtime.run_exact_actions(actions, 1U);
+        if (!frame) {
+            frames_ok = false;
+            break;
+        }
+        animation_updates += frame->animation_frame_updates;
+        particle_updates += frame->particle_updates;
+        camera_updates += frame->camera_follow_updates;
+    }
+    const auto allocations = measured.finish();
+
+    REQUIRE(frames_ok);
+    CHECK(allocations.allocations == 0U);
+    CHECK(allocations.bytes == 0U);
+    CHECK(animation_updates > 0U);
+    CHECK(particle_updates > 0U);
+    CHECK(camera_updates == 120U);
+    REQUIRE(runtime.tile_value(0U, 4U, 1U));
+    CHECK(*runtime.tile_value(0U, 4U, 1U) == 2U);
+    REQUIRE(runtime.field_value(0U, 4U, 1U));
+    CHECK(*runtime.field_value(0U, 4U, 1U) == 30);
+}
+
+TEST_CASE("Versioned save roundtrip is atomic and rejects corruption transactionally") {
+    const auto plan = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(plan);
+    const auto save_root = std::filesystem::temp_directory_path() / "ai2d-v06-save-roundtrip";
+    std::error_code error{};
+    std::filesystem::remove_all(save_root, error);
+    REQUIRE(!error);
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    options.save_directory_override = save_root;
+    REQUIRE(runtime.initialize(*plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan->actions.size());
+    const auto pulse = [&](const std::uint32_t action) {
+        std::fill(actions.begin(), actions.end(), ai2d::GameActionInput{});
+        actions[action].pressed = true;
+        return runtime.run_exact_actions(actions, 1U);
+    };
+
+    REQUIRE(pulse(2U));
+    REQUIRE(runtime.state_value(0U));
+    CHECK(*runtime.state_value(0U) == 1);
+    const auto saved = pulse(3U);
+    REQUIRE(saved);
+    CHECK(saved->save_attempts == 1U);
+    CHECK(saved->save_successes == 1U);
+    CHECK(saved->save_failures == 0U);
+    const auto save_path = save_root / "slot-0.ai2dsave";
+    CHECK(std::filesystem::is_regular_file(save_path));
+    CHECK_FALSE(std::filesystem::exists(save_root / "slot-0.ai2dsave.tmp"));
+
+    REQUIRE(pulse(2U));
+    CHECK(*runtime.state_value(0U) == 2);
+    const auto loaded = pulse(4U);
+    REQUIRE(loaded);
+    CHECK(loaded->save_successes == 1U);
+    CHECK(*runtime.state_value(0U) == 1);
+
+    REQUIRE(pulse(2U));
+    CHECK(*runtime.state_value(0U) == 2);
+    {
+        std::ofstream corrupt{save_path, std::ios::binary | std::ios::trunc};
+        REQUIRE(corrupt);
+        corrupt << "not-a-save";
+    }
+    const auto rejected = pulse(4U);
+    REQUIRE(rejected);
+    CHECK(rejected->save_attempts == 1U);
+    CHECK(rejected->save_failures == 1U);
+    CHECK(rejected->save_successes == 0U);
+    CHECK(*runtime.state_value(0U) == 2);
+    REQUIRE(runtime.state_value(1U));
+    CHECK(*runtime.state_value(1U) == 0);
+    CHECK_FALSE(runtime.diagnostics().empty());
+    CHECK(runtime.diagnostics().back().code == ai2d::DiagnosticCode::runtime_save_state_invalid);
+
+    std::filesystem::remove_all(save_root, error);
+    CHECK(!error);
+}
+
+TEST_CASE("Concurrent save writers use isolated atomic publication files") {
+    const auto plan = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(plan);
+    const auto save_root = std::filesystem::temp_directory_path() / "ai2d-v06-save-concurrent";
+    std::error_code error{};
+    std::filesystem::remove_all(save_root, error);
+    REQUIRE_FALSE(error);
+
+    ai2d::GameRuntime first{};
+    ai2d::GameRuntime second{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    options.save_directory_override = save_root;
+    REQUIRE(first.initialize(*plan, options));
+    REQUIRE(second.initialize(*plan, options));
+    std::vector<ai2d::GameActionInput> first_actions(plan->actions.size());
+    std::vector<ai2d::GameActionInput> second_actions(plan->actions.size());
+    first_actions[2U].pressed = true;
+    second_actions[2U].pressed = true;
+    REQUIRE(first.run_exact_actions(first_actions, 1U));
+    REQUIRE(second.run_exact_actions(second_actions, 1U));
+    REQUIRE(second.run_exact_actions(second_actions, 1U));
+    first_actions.assign(plan->actions.size(), {});
+    second_actions.assign(plan->actions.size(), {});
+    first_actions[3U].pressed = true;
+    second_actions[3U].pressed = true;
+    ai2d::Result<ai2d::GameRuntimeFrameMetrics> first_saved{};
+    ai2d::Result<ai2d::GameRuntimeFrameMetrics> second_saved{};
+    std::thread first_writer{[&] { first_saved = first.run_exact_actions(first_actions, 1U); }};
+    std::thread second_writer{[&] { second_saved = second.run_exact_actions(second_actions, 1U); }};
+    first_writer.join();
+    second_writer.join();
+    REQUIRE(first_saved);
+    REQUIRE(second_saved);
+    CHECK(first_saved->save_successes == 1U);
+    CHECK(second_saved->save_successes == 1U);
+    for (const auto& entry : std::filesystem::directory_iterator(save_root)) {
+        CHECK(entry.path().filename().string().find(".tmp.") == std::string::npos);
+    }
+
+    ai2d::GameRuntime reader{};
+    REQUIRE(reader.initialize(*plan, options));
+    std::vector<ai2d::GameActionInput> load(plan->actions.size());
+    load[4U].pressed = true;
+    const auto loaded = reader.run_exact_actions(load, 1U);
+    REQUIRE(loaded);
+    CHECK(loaded->save_successes == 1U);
+    REQUIRE(reader.state_value(0U));
+    CHECK((*reader.state_value(0U) == 1 || *reader.state_value(0U) == 2));
+
+    std::filesystem::remove_all(save_root, error);
+    CHECK_FALSE(error);
+}
+
+TEST_CASE("Save restore rejects maximum fixed-tick counters transactionally") {
+    const auto plan = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(plan);
+    const auto save_root = std::filesystem::temp_directory_path() / "ai2d-v06-save-counter-headroom";
+    std::error_code error{};
+    std::filesystem::remove_all(save_root, error);
+    REQUIRE_FALSE(error);
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    options.save_directory_override = save_root;
+    REQUIRE(runtime.initialize(*plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan->actions.size());
+    actions[2U].pressed = true;
+    REQUIRE(runtime.run_exact_actions(actions, 1U));
+    actions.assign(plan->actions.size(), {});
+    actions[3U].pressed = true;
+    REQUIRE(runtime.run_exact_actions(actions, 1U));
+    REQUIRE(runtime.state_value(0U));
+    const auto preserved_score = *runtime.state_value(0U);
+
+    const auto save_path = save_root / "slot-0.ai2dsave";
+    const auto file_size = std::filesystem::file_size(save_path, error);
+    REQUIRE_FALSE(error);
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(file_size));
+    {
+        std::ifstream stream{save_path, std::ios::binary};
+        REQUIRE(stream);
+        stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        REQUIRE(stream);
+    }
+    constexpr std::size_t simulation_tick_offset = 60U;
+    for (std::size_t byte = 0U; byte < 8U; ++byte) bytes[simulation_tick_offset + byte] = 0xFFU;
+    std::uint64_t checksum = 14'695'981'039'346'656'037ULL;
+    for (std::size_t index = 36U; index < bytes.size(); ++index) {
+        checksum ^= bytes[index];
+        checksum *= 1'099'511'628'211ULL;
+    }
+    for (std::size_t byte = 0U; byte < 8U; ++byte) {
+        bytes[28U + byte] = static_cast<std::uint8_t>(checksum >> (byte * 8U));
+    }
+    {
+        std::ofstream stream{save_path, std::ios::binary | std::ios::trunc};
+        REQUIRE(stream);
+        stream.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        REQUIRE(stream);
+    }
+    actions.assign(plan->actions.size(), {});
+    actions[4U].pressed = true;
+    const auto rejected = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(rejected);
+    CHECK(rejected->save_failures == 1U);
+    REQUIRE(runtime.state_value(0U));
+    CHECK(*runtime.state_value(0U) == preserved_score);
+    std::filesystem::remove_all(save_root, error);
+    CHECK_FALSE(error);
+}
+
+TEST_CASE("Save restore rejects checksum-valid payloads with invalid UI focus state") {
+    const auto plan = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(plan);
+    const auto save_root = std::filesystem::temp_directory_path() / "ai2d-v06-save-focus-validation";
+    std::error_code error{};
+    std::filesystem::remove_all(save_root, error);
+    REQUIRE(!error);
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    options.save_directory_override = save_root;
+    REQUIRE(runtime.initialize(*plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan->actions.size());
+    const auto pulse = [&](const std::uint32_t action) {
+        std::fill(actions.begin(), actions.end(), ai2d::GameActionInput{});
+        actions[action].pressed = true;
+        return runtime.run_exact_actions(actions, 1U);
+    };
+
+    REQUIRE(pulse(3U));
+    REQUIRE(pulse(2U));
+    REQUIRE(runtime.state_value(0U));
+    CHECK(*runtime.state_value(0U) == 1);
+
+    const auto save_path = save_root / "slot-0.ai2dsave";
+    const auto file_size = std::filesystem::file_size(save_path, error);
+    REQUIRE(!error);
+    REQUIRE(file_size > 86U);
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(file_size));
+    {
+        std::ifstream stream{save_path, std::ios::binary};
+        REQUIRE(stream);
+        stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        REQUIRE(stream);
+    }
+    // The sample has one saved state and one included scene. The focus field
+    // begins after the fixed 36-byte header, top-level state/scene fields,
+    // included marker, retained marker, and scene tick.
+    constexpr std::size_t focus_offset = 82U;
+    for (std::size_t byte = 0U; byte < 4U; ++byte) bytes[focus_offset + byte] = 0xFFU;
+    std::uint64_t checksum = 14'695'981'039'346'656'037ULL;
+    for (std::size_t index = 36U; index < bytes.size(); ++index) {
+        checksum ^= bytes[index];
+        checksum *= 1'099'511'628'211ULL;
+    }
+    constexpr std::size_t checksum_offset = 28U;
+    for (std::size_t byte = 0U; byte < 8U; ++byte) {
+        bytes[checksum_offset + byte] = static_cast<std::uint8_t>(checksum >> (byte * 8U));
+    }
+    {
+        std::ofstream stream{save_path, std::ios::binary | std::ios::trunc};
+        REQUIRE(stream);
+        stream.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        REQUIRE(stream);
+    }
+
+    const auto rejected = pulse(4U);
+    REQUIRE(rejected);
+    CHECK(rejected->save_attempts == 1U);
+    CHECK(rejected->save_failures == 1U);
+    CHECK(rejected->save_successes == 0U);
+    REQUIRE(runtime.state_value(0U));
+    CHECK(*runtime.state_value(0U) == 1);
+    REQUIRE_FALSE(runtime.diagnostics().empty());
+    CHECK(runtime.diagnostics().back().code == ai2d::DiagnosticCode::runtime_save_state_invalid);
+
+    std::filesystem::remove_all(save_root, error);
+    CHECK(!error);
+}
+
+TEST_CASE("Deferred save work observes the exact fixed tick boundary inside batched execution") {
+    const auto compiled = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+
+    ai2d::GameRulePlan increment{};
+    increment.symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+    plan.symbols.push_back("batch-boundary-increment");
+    increment.event.kind = ai2d::GameRuleEventKind::fixed_interval;
+    increment.event.interval_ticks = 1U;
+    ai2d::GameRuleActionPlan add{};
+    add.kind = ai2d::GameRuleActionKind::add_int_state;
+    add.state_index = 0U;
+    add.value = 1;
+    increment.actions.push_back(add);
+
+    ai2d::GameRulePlan save_at_two{};
+    save_at_two.symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+    plan.symbols.push_back("batch-boundary-save");
+    save_at_two.event.kind = ai2d::GameRuleEventKind::fixed_interval;
+    save_at_two.event.interval_ticks = 1U;
+    ai2d::GameRuleConditionPlan equals_two{};
+    equals_two.kind = ai2d::GameRuleConditionKind::int_state;
+    equals_two.comparison = ai2d::GameComparison::equal;
+    equals_two.state_index = 0U;
+    equals_two.value = 2;
+    save_at_two.conditions.push_back(equals_two);
+    ai2d::GameRuleActionPlan save{};
+    save.kind = ai2d::GameRuleActionKind::save_slot;
+    save.save_slot = 0U;
+    save_at_two.actions.push_back(save);
+    plan.scenes.front().rules.push_back(std::move(increment));
+    plan.scenes.front().rules.push_back(std::move(save_at_two));
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    const auto save_root = std::filesystem::temp_directory_path() / "ai2d-v06-save-batch-boundary";
+    std::error_code error{};
+    std::filesystem::remove_all(save_root, error);
+    REQUIRE(!error);
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    options.save_directory_override = save_root;
+    REQUIRE(runtime.initialize(plan, options));
+
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+    const auto batched = runtime.run_exact_actions(actions, 4U);
+    REQUIRE(batched);
+    CHECK(batched->save_attempts == 1U);
+    CHECK(batched->save_successes == 1U);
+    REQUIRE(runtime.state_value(0U));
+    CHECK(*runtime.state_value(0U) == 4);
+
+    actions[4U].pressed = true;
+    const auto loaded = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(loaded);
+    CHECK(loaded->save_successes == 1U);
+    REQUIRE(runtime.state_value(0U));
+    CHECK(*runtime.state_value(0U) == 2);
+
+    std::filesystem::remove_all(save_root, error);
+    CHECK(!error);
+}
+
+TEST_CASE("Save capacity includes every bounded rule counter without buffer growth") {
+    const auto compiled = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto& rules = plan.scenes.front().rules;
+    while (rules.size() < ai2d::GameScenePlan::max_rules) {
+        ai2d::GameRulePlan padding{};
+        padding.symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+        plan.symbols.push_back("save-capacity-rule-" + std::to_string(rules.size()));
+        padding.event.kind = ai2d::GameRuleEventKind::fixed_interval;
+        padding.event.interval_ticks = 1U;
+        ai2d::GameRuleActionPlan set{};
+        set.kind = ai2d::GameRuleActionKind::set_int_state;
+        set.state_index = 0U;
+        set.value = 0;
+        padding.actions.push_back(set);
+        rules.push_back(std::move(padding));
+    }
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    const auto save_root = std::filesystem::temp_directory_path() / "ai2d-v06-save-capacity";
+    std::error_code error{};
+    std::filesystem::remove_all(save_root, error);
+    REQUIRE(!error);
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    options.save_directory_override = save_root;
+    REQUIRE(runtime.initialize(plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+    actions[3U].pressed = true;
+    const auto saved = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(saved);
+    CHECK(saved->save_attempts == 1U);
+    CHECK(saved->save_successes == 1U);
+    CHECK(saved->save_failures == 0U);
+
+    std::filesystem::remove_all(save_root, error);
+    CHECK(!error);
+}
+
+TEST_CASE("Save restore preserves the global clock and active particle lifetime") {
+    const auto plan = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(plan);
+    const auto save_root = std::filesystem::temp_directory_path() / "ai2d-v06-save-lifetime-clock";
+    std::error_code error{};
+    std::filesystem::remove_all(save_root, error);
+    REQUIRE(!error);
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    options.save_directory_override = save_root;
+    REQUIRE(runtime.initialize(*plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan->actions.size());
+    const auto pulse = [&](const std::uint32_t action) {
+        std::fill(actions.begin(), actions.end(), ai2d::GameActionInput{});
+        actions[action].pressed = true;
+        return runtime.run_exact_actions(actions, 1U);
+    };
+
+    const auto emitted = pulse(2U);
+    REQUIRE(emitted);
+    CHECK(emitted->particle_emits == 4U);
+    const auto saved = pulse(3U);
+    REQUIRE(saved);
+    CHECK(saved->save_successes == 1U);
+
+    std::fill(actions.begin(), actions.end(), ai2d::GameActionInput{});
+    const auto expired = runtime.run_exact_actions(actions, 24U);
+    REQUIRE(expired);
+    CHECK(expired->particle_updates > 0U);
+
+    const auto loaded = pulse(4U);
+    REQUIRE(loaded);
+    CHECK(loaded->save_successes == 1U);
+    CHECK(loaded->simulation_tick == 2U);
+    std::fill(actions.begin(), actions.end(), ai2d::GameActionInput{});
+    const auto resumed = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(resumed);
+    CHECK(resumed->particle_updates == 4U);
+
+    std::filesystem::remove_all(save_root, error);
+    CHECK(!error);
+}
+
+TEST_CASE("Save restore accepts a completed one-shot animation with zero remaining ticks") {
+    const auto compiled = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto& rules = plan.scenes.front().rules;
+    rules.erase(
+        std::remove_if(rules.begin(), rules.end(), [&](const ai2d::GameRulePlan& rule) {
+            return plan.symbol(rule.symbol) == "resume_pulse";
+        }),
+        rules.end());
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    const auto save_root = std::filesystem::temp_directory_path() / "ai2d-v06-save-completed-animation";
+    std::error_code error{};
+    std::filesystem::remove_all(save_root, error);
+    REQUIRE(!error);
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    options.save_directory_override = save_root;
+    REQUIRE(runtime.initialize(plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+
+    actions[2U].pressed = true;
+    REQUIRE(runtime.run_exact_actions(actions, 1U));
+    std::fill(actions.begin(), actions.end(), ai2d::GameActionInput{});
+    REQUIRE(runtime.run_exact_actions(actions, 3U));
+    REQUIRE(runtime.animation_frame(0U, 0U));
+    CHECK(*runtime.animation_frame(0U, 0U) == 1U);
+
+    actions[3U].pressed = true;
+    const auto saved = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(saved);
+    CHECK(saved->save_successes == 1U);
+    std::fill(actions.begin(), actions.end(), ai2d::GameActionInput{});
+    REQUIRE(runtime.run_exact_actions(actions, 8U));
+    actions[4U].pressed = true;
+    const auto loaded = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(loaded);
+    CHECK(loaded->save_successes == 1U);
+    CHECK(loaded->save_failures == 0U);
+    REQUIRE(runtime.animation_frame(0U, 0U));
+    CHECK(*runtime.animation_frame(0U, 0U) == 1U);
+
+    std::fill(actions.begin(), actions.end(), ai2d::GameActionInput{});
+    const auto remained_complete = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(remained_complete);
+    CHECK(remained_complete->animation_completions == 0U);
+
+    std::filesystem::remove_all(save_root, error);
+    CHECK(!error);
+}
+
+TEST_CASE("Input profile switches resolve gamepad axes into logical action edges") {
+    const auto plan = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(plan);
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(*plan, options));
+
+    ai2d::InputSnapshot switch_profile{};
+    switch_profile.drawable_extent = {1280U, 720U};
+    switch_profile.keys[static_cast<std::uint8_t>(ai2d::InputKey::tab)] = true;
+    switch_profile.pressed_keys[static_cast<std::uint8_t>(ai2d::InputKey::tab)] = true;
+    const auto switched = runtime.advance(switch_profile, 1.0 / 60.0);
+    REQUIRE(switched);
+    CHECK(switched->input_profile_switches == 1U);
+
+    ai2d::InputSnapshot axis{};
+    axis.drawable_extent = {1280U, 720U};
+    axis.gamepad_connected = true;
+    axis.gamepad_axes[static_cast<std::uint8_t>(ai2d::InputGamepadAxis::left_x)] = 0.75F;
+    REQUIRE(runtime.advance(axis, 1.0 / 60.0));
+    REQUIRE(runtime.advance(axis, 1.0 / 60.0));
+    REQUIRE(runtime.entity_position(0U, 0U));
+    CHECK(runtime.entity_position(0U, 0U)->x == Catch::Approx(0.2F));
+
+    ai2d::InputSnapshot centered{};
+    centered.drawable_extent = {1280U, 720U};
+    centered.gamepad_connected = true;
+    REQUIRE(runtime.advance(centered, 1.0 / 60.0));
+    REQUIRE(runtime.entity_position(0U, 0U));
+    CHECK(runtime.entity_position(0U, 0U)->x == Catch::Approx(0.2F));
+    REQUIRE(runtime.entity_velocity(0U, 0U));
+    CHECK(runtime.entity_velocity(0U, 0U)->x == Catch::Approx(0.0F));
+}
+
+TEST_CASE("Input profile switches release logical actions whose old bindings remain physically held") {
+    const auto plan = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(plan);
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(*plan, options));
+
+    ai2d::InputSnapshot move{};
+    move.drawable_extent = {1280U, 720U};
+    move.keys[static_cast<std::uint8_t>(ai2d::InputKey::right)] = true;
+    move.pressed_keys[static_cast<std::uint8_t>(ai2d::InputKey::right)] = true;
+    REQUIRE(runtime.advance(move, 1.0 / 60.0));
+
+    ai2d::InputSnapshot switch_profile{};
+    switch_profile.drawable_extent = {1280U, 720U};
+    switch_profile.keys[static_cast<std::uint8_t>(ai2d::InputKey::right)] = true;
+    switch_profile.keys[static_cast<std::uint8_t>(ai2d::InputKey::tab)] = true;
+    switch_profile.pressed_keys[static_cast<std::uint8_t>(ai2d::InputKey::tab)] = true;
+    const auto switched = runtime.advance(switch_profile, 1.0 / 60.0);
+    REQUIRE(switched);
+    CHECK(switched->input_profile_switches == 1U);
+    REQUIRE(runtime.entity_position(0U, 0U));
+    CHECK(runtime.entity_position(0U, 0U)->x == Catch::Approx(0.2F));
+
+    ai2d::InputSnapshot still_held{};
+    still_held.drawable_extent = {1280U, 720U};
+    still_held.keys[static_cast<std::uint8_t>(ai2d::InputKey::right)] = true;
+    const auto released = runtime.advance(still_held, 1.0 / 60.0);
+    REQUIRE(released);
+    CHECK(released->input_edge_ticks == 1U);
+    REQUIRE(runtime.entity_position(0U, 0U));
+    CHECK(runtime.entity_position(0U, 0U)->x == Catch::Approx(0.2F));
+    REQUIRE(runtime.entity_velocity(0U, 0U));
+    CHECK(runtime.entity_velocity(0U, 0U)->x == Catch::Approx(0.0F));
+}
+
+TEST_CASE("Aggregate logical input edges do not retrigger when a second binding is pressed") {
+    const auto compiled = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto& rules = plan.scenes.front().rules;
+    ai2d::GameRulePlan count_press{};
+    count_press.symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+    plan.symbols.push_back("count-aggregate-press");
+    count_press.event.kind = ai2d::GameRuleEventKind::action_pressed;
+    count_press.event.action_index = 0U;
+    ai2d::GameRuleActionPlan add{};
+    add.kind = ai2d::GameRuleActionKind::add_int_state;
+    add.state_index = 0U;
+    add.value = 1;
+    count_press.actions.push_back(add);
+    rules.push_back(count_press);
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(plan, options));
+
+    ai2d::InputSnapshot first{};
+    first.drawable_extent = {1280U, 720U};
+    first.keys[static_cast<std::uint8_t>(ai2d::InputKey::left)] = true;
+    first.pressed_keys[static_cast<std::uint8_t>(ai2d::InputKey::left)] = true;
+    REQUIRE(runtime.run_exact(first, 1U));
+
+    ai2d::InputSnapshot second = first;
+    second.pressed_keys[static_cast<std::uint8_t>(ai2d::InputKey::left)] = false;
+    second.keys[static_cast<std::uint8_t>(ai2d::InputKey::a)] = true;
+    second.pressed_keys[static_cast<std::uint8_t>(ai2d::InputKey::a)] = true;
+    REQUIRE(runtime.run_exact(second, 1U));
+    REQUIRE(runtime.state_value(0U));
+    CHECK(*runtime.state_value(0U) == 1);
+
+    ai2d::InputSnapshot release_first = second;
+    release_first.keys[static_cast<std::uint8_t>(ai2d::InputKey::left)] = false;
+    release_first.pressed_keys[static_cast<std::uint8_t>(ai2d::InputKey::a)] = false;
+    release_first.released_keys[static_cast<std::uint8_t>(ai2d::InputKey::left)] = true;
+    const auto intermediate = runtime.run_exact(release_first, 1U);
+    REQUIRE(intermediate);
+    CHECK(intermediate->input_edge_ticks == 0U);
+
+    ai2d::InputSnapshot release_last{};
+    release_last.drawable_extent = {1280U, 720U};
+    release_last.released_keys[static_cast<std::uint8_t>(ai2d::InputKey::a)] = true;
+    const auto final = runtime.run_exact(release_last, 1U);
+    REQUIRE(final);
+    CHECK(final->input_edge_ticks == 1U);
+}
+
+TEST_CASE("Profile switches are fixed-boundary equivalent inside batched execution") {
+    const auto plan = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(plan);
+    ai2d::GameRuntime batched{};
+    ai2d::GameRuntime stepped{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    REQUIRE(batched.initialize(*plan, options));
+    REQUIRE(stepped.initialize(*plan, options));
+
+    ai2d::InputSnapshot held_switch{};
+    held_switch.drawable_extent = {1280U, 720U};
+    held_switch.keys[static_cast<std::uint8_t>(ai2d::InputKey::right)] = true;
+    held_switch.pressed_keys[static_cast<std::uint8_t>(ai2d::InputKey::right)] = true;
+    held_switch.keys[static_cast<std::uint8_t>(ai2d::InputKey::tab)] = true;
+    held_switch.pressed_keys[static_cast<std::uint8_t>(ai2d::InputKey::tab)] = true;
+    const auto batch = batched.run_exact(held_switch, 3U);
+    REQUIRE(batch);
+
+    REQUIRE(stepped.run_exact(held_switch, 1U));
+    ai2d::InputSnapshot held{};
+    held.drawable_extent = {1280U, 720U};
+    held.keys[static_cast<std::uint8_t>(ai2d::InputKey::right)] = true;
+    REQUIRE(stepped.run_exact(held, 1U));
+    const auto final = stepped.run_exact(held, 1U);
+    REQUIRE(final);
+
+    REQUIRE(batched.entity_position(0U, 0U));
+    REQUIRE(stepped.entity_position(0U, 0U));
+    CHECK(batched.entity_position(0U, 0U)->x == Catch::Approx(stepped.entity_position(0U, 0U)->x));
+    REQUIRE(batched.entity_velocity(0U, 0U));
+    REQUIRE(stepped.entity_velocity(0U, 0U));
+    CHECK(batched.entity_velocity(0U, 0U)->x == Catch::Approx(stepped.entity_velocity(0U, 0U)->x));
+    CHECK(batch->scene_state_checksum == Catch::Approx(final->scene_state_checksum));
+}
+
+TEST_CASE("Fresh initial animation applies frame zero before its first tick") {
+    const auto compiled = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(compiled);
+    auto baseline_plan = *compiled;
+    auto changed_plan = *compiled;
+    changed_plan.animations.front().frames.front().uv.min.x = 0.125F;
+    changed_plan.plan_hash = ai2d::compute_game_plan_hash(changed_plan);
+    REQUIRE(ai2d::validate_game_plan(changed_plan));
+
+    ai2d::GameRuntime baseline{};
+    ai2d::GameRuntime changed{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    REQUIRE(baseline.initialize(baseline_plan, options));
+    REQUIRE(changed.initialize(changed_plan, options));
+    const auto baseline_frame = baseline.run_exact({}, 1U);
+    const auto changed_frame = changed.run_exact({}, 1U);
+    REQUIRE(baseline_frame);
+    REQUIRE(changed_frame);
+    REQUIRE(baseline.animation_frame(0U, 0U));
+    REQUIRE(changed.animation_frame(0U, 0U));
+    CHECK(*baseline.animation_frame(0U, 0U) == 0U);
+    CHECK(*changed.animation_frame(0U, 0U) == 0U);
+    CHECK(changed_frame->scene_state_checksum != baseline_frame->scene_state_checksum);
+}
+
+TEST_CASE("Particle slot selection stays bounded under maximum emission") {
+    const auto compiled = ai2d::compile_game_file(content_foundations_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto& emitter = plan.scenes.front().particle_emitters.front();
+    emitter.capacity = 10'000U;
+    emitter.on_exhausted = ai2d::GamePoolExhaustionPolicy::recycle_oldest;
+    auto& burst = *std::find_if(
+        plan.scenes.front().rules.begin(), plan.scenes.front().rules.end(),
+        [&](const ai2d::GameRulePlan& rule) { return plan.symbol(rule.symbol) == "burst"; });
+    auto& emit = *std::find_if(
+        burst.actions.begin(), burst.actions.end(),
+        [](const ai2d::GameRuleActionPlan& action) {
+            return action.kind == ai2d::GameRuleActionKind::emit_particles;
+        });
+    emit.particle_count = 10'000U;
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.enable_audio = false;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+    actions[2U].pressed = true;
+    ai2d::Result<ai2d::GameRuntimeFrameMetrics> filled{};
+    ai2d::AllocationSnapshot allocation{};
+    {
+        ai2d::MeasuredAllocationScope measured{};
+        filled = runtime.run_exact_actions(actions, 1U);
+        allocation = measured.finish();
+    }
+    REQUIRE(filled);
+    CHECK(filled->particle_emits == 10'000U);
+    CHECK(filled->particle_slot_operations < 1'000'000U);
+    CHECK(allocation.allocations == 0U);
+
+    ai2d::Result<ai2d::GameRuntimeFrameMetrics> recycled{};
+    ai2d::AllocationSnapshot recycle_allocation{};
+    {
+        ai2d::MeasuredAllocationScope measured{};
+        recycled = runtime.run_exact_actions(actions, 1U);
+        recycle_allocation = measured.finish();
+    }
+    REQUIRE(recycled);
+    CHECK(recycled->particle_emits == 10'000U);
+    CHECK(recycled->particle_slot_operations == 10'000U);
+    CHECK(recycle_allocation.allocations == 0U);
 }

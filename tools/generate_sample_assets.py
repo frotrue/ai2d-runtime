@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import struct
+import wave
 import zlib
 
 
@@ -17,6 +19,7 @@ SAMPLES = (
     "timed_pickups",
     "pool_siege",
     "contact_course",
+    "content_foundations",
 )
 
 
@@ -129,12 +132,34 @@ def make_sprites(directory: Path) -> None:
     write_png(directory / "sprites.png", width, height, pixels)
 
 
+def make_music(directory: Path) -> None:
+    sample_rate = 48_000
+    duration_frames = sample_rate // 2
+    samples = bytearray()
+    for frame in range(duration_frames):
+        phase = frame / sample_rate
+        envelope = min(1.0, frame / 1_200.0) * min(1.0, (duration_frames - frame) / 2_400.0)
+        value = int(
+            5_500
+            * envelope
+            * (math.sin(2.0 * math.pi * 220.0 * phase) + 0.35 * math.sin(2.0 * math.pi * 330.0 * phase))
+        )
+        samples.extend(struct.pack("<hh", value, value))
+    with wave.open(str(directory / "music.wav"), "wb") as stream:
+        stream.setnchannels(2)
+        stream.setsampwidth(2)
+        stream.setframerate(sample_rate)
+        stream.writeframes(samples)
+
+
 def main() -> None:
     for sample in SAMPLES:
         directory = ROOT / "samples" / sample / "assets"
         directory.mkdir(parents=True, exist_ok=True)
         make_sprites(directory)
         make_font(directory)
+        if sample == "content_foundations":
+            make_music(directory)
     print("generated procedural sample assets")
 
 

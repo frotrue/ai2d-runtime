@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "events": [
+    {"tick": 2, "action": "burst", "kind": "tap"},
+    {"tick": 6, "action": "move_right", "kind": "press"},
+    {"tick": 12, "action": "move_right", "kind": "release"},
+    {"tick": 14, "action": "alternate_locale", "kind": "tap"},
+    {"tick": 16, "action": "gamepad_profile", "kind": "tap"}
+  ]
+}

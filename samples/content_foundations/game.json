@@ -1,0 +1,57 @@
+{
+  "schema_version": "0.6",
+  "seed": 6042026,
+  "name": "Content Foundations",
+  "organization": "AI2D",
+  "application": "content_foundations",
+  "window": {"title": "AI2D Content Foundations", "width": 1280, "height": 720, "virtual_width": 1280, "virtual_height": 720, "default_fps": "120"},
+  "assets": [
+    {"id": "sprites", "kind": "png", "path": "assets/sprites.png"},
+    {"id": "font", "kind": "font", "path": "assets/font.png", "metadata": "assets/font.json"},
+    {"id": "theme", "kind": "music", "path": "assets/music.wav"}
+  ],
+  "animations": [
+    {"id": "pulse", "texture": "sprites", "mode": "loop", "frames": [
+      {"uv": [0, 0, 0.25, 1], "duration_ticks": 3},
+      {"uv": [0.25, 0, 0.25, 1], "duration_ticks": 3}
+    ]},
+    {"id": "burst", "texture": "sprites", "mode": "once", "frames": [
+      {"uv": [0.5, 0, 0.25, 1], "duration_ticks": 2},
+      {"uv": [0.75, 0, 0.25, 1], "duration_ticks": 2}
+    ]}
+  ],
+  "prefabs": [{"id": "animated_actor", "path": "prefabs/animated-actor.json"}],
+  "localizations": [
+    {"locale": "en", "path": "locales/en.json"},
+    {"locale": "alt", "path": "locales/alt.json"}
+  ],
+  "default_locale": "en",
+  "actions": [
+    {"id": "move_left", "keys": ["left", "a"]},
+    {"id": "move_right", "keys": ["right", "d"]},
+    {"id": "burst", "keys": ["space"]},
+    {"id": "save", "keys": ["q"]},
+    {"id": "load", "keys": ["e"]},
+    {"id": "delete_save", "keys": ["r"]},
+    {"id": "alternate_locale", "keys": ["f"]},
+    {"id": "gamepad_profile", "keys": ["tab"]}
+  ],
+  "input_profiles": [
+    {"id": "keyboard", "bindings": []},
+    {"id": "gamepad", "bindings": [
+      {"action": "move_left", "keys": [], "gamepad_axes": [{"axis": "left_x", "direction": "negative", "deadzone": 0.25}]},
+      {"action": "move_right", "keys": [], "gamepad_axes": [{"axis": "left_x", "direction": "positive", "deadzone": 0.25}]},
+      {"action": "burst", "keys": [], "gamepad_buttons": ["south"]}
+    ]}
+  ],
+  "default_input_profile": "keyboard",
+  "states": [
+    {"id": "score", "initial": 0, "min": 0, "max": 9999},
+    {"id": "save_result", "initial": 0, "min": 0, "max": 1},
+    {"id": "cell_result", "initial": 0, "min": 0, "max": 1}
+  ],
+  "save": {"slots": 2, "states": ["score"]},
+  "scenes": [{"id": "lab", "path": "scenes/lab.json"}],
+  "start_scene": "lab",
+  "transitions": []
+}

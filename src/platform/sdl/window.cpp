@@ -2,6 +2,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <utility>
@@ -17,9 +18,43 @@ constexpr std::array<SDL_Scancode, static_cast<std::uint8_t>(InputKey::count)> i
     SDL_SCANCODE_DOWN,
     SDL_SCANCODE_A,
     SDL_SCANCODE_D,
+    SDL_SCANCODE_W,
+    SDL_SCANCODE_S,
+    SDL_SCANCODE_Q,
+    SDL_SCANCODE_E,
+    SDL_SCANCODE_R,
+    SDL_SCANCODE_F,
+    SDL_SCANCODE_LSHIFT,
+    SDL_SCANCODE_LCTRL,
     SDL_SCANCODE_SPACE,
     SDL_SCANCODE_RETURN,
     SDL_SCANCODE_TAB,
+};
+
+constexpr std::array<SDL_GamepadButton, static_cast<std::uint8_t>(InputGamepadButton::count)> input_gamepad_buttons{
+    SDL_GAMEPAD_BUTTON_SOUTH,
+    SDL_GAMEPAD_BUTTON_EAST,
+    SDL_GAMEPAD_BUTTON_WEST,
+    SDL_GAMEPAD_BUTTON_NORTH,
+    SDL_GAMEPAD_BUTTON_BACK,
+    SDL_GAMEPAD_BUTTON_START,
+    SDL_GAMEPAD_BUTTON_LEFT_STICK,
+    SDL_GAMEPAD_BUTTON_RIGHT_STICK,
+    SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,
+    SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,
+    SDL_GAMEPAD_BUTTON_DPAD_UP,
+    SDL_GAMEPAD_BUTTON_DPAD_DOWN,
+    SDL_GAMEPAD_BUTTON_DPAD_LEFT,
+    SDL_GAMEPAD_BUTTON_DPAD_RIGHT,
+};
+
+constexpr std::array<SDL_GamepadAxis, static_cast<std::uint8_t>(InputGamepadAxis::count)> input_gamepad_axes{
+    SDL_GAMEPAD_AXIS_LEFTX,
+    SDL_GAMEPAD_AXIS_LEFTY,
+    SDL_GAMEPAD_AXIS_RIGHTX,
+    SDL_GAMEPAD_AXIS_RIGHTY,
+    SDL_GAMEPAD_AXIS_LEFT_TRIGGER,
+    SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,
 };
 
 Diagnostic sdl_error(const char* action) {
@@ -44,8 +79,11 @@ std::uint32_t checked_extent(const int value) noexcept {
 class PlatformWindow::Impl final {
   public:
     SDL_Window* window{nullptr};
+    SDL_Gamepad* gamepad{nullptr};
     bool owns_video{false};
+    bool owns_gamepad{false};
     std::array<bool, static_cast<std::uint8_t>(InputKey::count)> previous_keys{};
+    std::array<bool, static_cast<std::uint8_t>(InputGamepadButton::count)> previous_gamepad_buttons{};
     bool mouse_left{false};
     float mouse_x{0.0F};
     float mouse_y{0.0F};
@@ -54,8 +92,14 @@ class PlatformWindow::Impl final {
         if (window != nullptr) {
             SDL_DestroyWindow(window);
         }
+        if (gamepad != nullptr) {
+            SDL_CloseGamepad(gamepad);
+        }
         if (owns_video) {
             SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        }
+        if (owns_gamepad) {
+            SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
         }
     }
 };
@@ -73,6 +117,15 @@ Result<void> PlatformWindow::open(const WindowOptions& options) {
         return std::unexpected(sdl_error("SDL video initialization failed"));
     }
     impl_->owns_video = true;
+    if (SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
+        impl_->owns_gamepad = true;
+        int gamepad_count = 0;
+        SDL_JoystickID* gamepads = SDL_GetGamepads(&gamepad_count);
+        if (gamepads != nullptr && gamepad_count > 0) {
+            impl_->gamepad = SDL_OpenGamepad(gamepads[0]);
+        }
+        SDL_free(gamepads);
+    }
 
     SDL_WindowFlags flags = SDL_WINDOW_VULKAN;
     if (options.hidden) {
@@ -137,7 +190,35 @@ Result<InputSnapshot> PlatformWindow::poll_input() {
                 break;
             }
             break;
+        case SDL_EVENT_GAMEPAD_ADDED:
+            if (impl_->gamepad == nullptr) impl_->gamepad = SDL_OpenGamepad(event.gdevice.which);
+            break;
+        case SDL_EVENT_GAMEPAD_REMOVED:
+            if (impl_->gamepad != nullptr && SDL_GetGamepadID(impl_->gamepad) == event.gdevice.which) {
+                SDL_CloseGamepad(impl_->gamepad);
+                impl_->gamepad = nullptr;
+                for (std::size_t index = 0U; index < impl_->previous_gamepad_buttons.size(); ++index) {
+                    snapshot.released_gamepad_buttons[index] = impl_->previous_gamepad_buttons[index];
+                }
+                impl_->previous_gamepad_buttons.fill(false);
+            }
+            break;
         default: break;
+        }
+    }
+    snapshot.gamepad_connected = impl_->gamepad != nullptr;
+    if (impl_->gamepad != nullptr) {
+        constexpr float axis_scale = 1.0F / 32767.0F;
+        for (std::size_t index = 0U; index < input_gamepad_buttons.size(); ++index) {
+            const bool current = SDL_GetGamepadButton(impl_->gamepad, input_gamepad_buttons[index]);
+            snapshot.gamepad_buttons[index] = current;
+            snapshot.pressed_gamepad_buttons[index] = current && !impl_->previous_gamepad_buttons[index];
+            snapshot.released_gamepad_buttons[index] = !current && impl_->previous_gamepad_buttons[index];
+            impl_->previous_gamepad_buttons[index] = current;
+        }
+        for (std::size_t index = 0U; index < input_gamepad_axes.size(); ++index) {
+            const auto raw = SDL_GetGamepadAxis(impl_->gamepad, input_gamepad_axes[index]);
+            snapshot.gamepad_axes[index] = std::clamp(static_cast<float>(raw) * axis_scale, -1.0F, 1.0F);
         }
     }
 

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai2d.local/schemas/prefab-v1.schema.json",
+  "title": "AI2D compile-time prefab v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version"],
+  "minProperties": 2,
+  "properties": {
+    "schema_version": {"const": "1"},
+    "transform": {"$ref": "#/$defs/transform"},
+    "velocity": {"$ref": "#/$defs/velocity"},
+    "sprite": {"$ref": "#/$defs/sprite"},
+    "collider": {"$ref": "#/$defs/collider"},
+    "animation": {"$ref": "#/$defs/animation"}
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "number": {"type": "number", "minimum": -3.4028234663852886e38, "maximum": 3.4028234663852886e38},
+    "vec2": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"}], "items": false},
+    "positive_vec2": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"type": "number", "exclusiveMinimum": 0}, {"type": "number", "exclusiveMinimum": 0}], "items": false},
+    "vec4": {"type": "array", "minItems": 4, "maxItems": 4, "prefixItems": [{"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"}], "items": false},
+    "color": {"type": "array", "minItems": 4, "maxItems": 4, "prefixItems": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "number", "minimum": 0, "maximum": 1}, {"type": "number", "minimum": 0, "maximum": 1}, {"type": "number", "minimum": 0, "maximum": 1}], "items": false},
+    "transform": {"type": "object", "additionalProperties": false, "properties": {"position_offset": {"$ref": "#/$defs/vec2"}, "rotation": {"$ref": "#/$defs/number"}, "scale": {"$ref": "#/$defs/positive_vec2"}}},
+    "velocity": {"type": "object", "additionalProperties": false, "properties": {"linear": {"$ref": "#/$defs/vec2"}, "angular": {"$ref": "#/$defs/number"}}},
+    "sprite": {"type": "object", "additionalProperties": false, "required": ["texture", "size"], "properties": {"texture": {"$ref": "#/$defs/id"}, "size": {"$ref": "#/$defs/positive_vec2"}, "pivot": {"$ref": "#/$defs/vec2"}, "uv": {"$ref": "#/$defs/vec4"}, "tint": {"$ref": "#/$defs/color"}, "layer": {"type": "integer", "minimum": -1000000, "maximum": 1000000}, "visible": {"type": "boolean"}}},
+    "collider": {"type": "object", "additionalProperties": false, "required": ["half_extent", "group", "body"], "properties": {"offset": {"$ref": "#/$defs/vec2"}, "half_extent": {"$ref": "#/$defs/positive_vec2"}, "group": {"$ref": "#/$defs/id"}, "body": {"enum": ["static", "kinematic", "dynamic"]}, "enabled": {"type": "boolean"}}},
+    "animation": {"type": "object", "additionalProperties": false, "required": ["clip"], "properties": {"clip": {"$ref": "#/$defs/id"}, "autoplay": {"type": "boolean"}}}
+  }
+}

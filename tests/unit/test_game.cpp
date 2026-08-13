@@ -50,6 +50,10 @@ std::filesystem::path contact_course_manifest() {
     return std::filesystem::path{AI2D_SOURCE_DIR} / "samples" / "contact_course" / "game.json";
 }
 
+std::filesystem::path content_foundations_manifest() {
+    return std::filesystem::path{AI2D_SOURCE_DIR} / "samples" / "content_foundations" / "game.json";
+}
+
 ai2d::InputSnapshot pressed(const ai2d::InputKey key) {
     ai2d::InputSnapshot input{};
     input.keys[static_cast<std::uint8_t>(key)] = true;
@@ -983,6 +987,9 @@ TEST_CASE("Declarative Breakout launches and scores through continuous collision
 
     REQUIRE(runtime.run_exact(pressed(ai2d::InputKey::space)));
     REQUIRE(runtime.current_scene() == "game");
+    // InputSnapshot is a physical-state sample. Let the menu press return to
+    // up before issuing the distinct launch press in the destination scene.
+    REQUIRE(runtime.run_exact({}));
     REQUIRE(runtime.run_exact(pressed(ai2d::InputKey::space)));
     for (std::uint32_t tick = 0U; tick < 600U && runtime.current_scene() == "game"; ++tick) {
         REQUIRE(runtime.run_exact({}));
@@ -1212,6 +1219,243 @@ TEST_CASE("same-scene retained transitions run scene_enter after session reset")
     CHECK(reentered->rule_executions == 1U);
     REQUIRE(runtime.state_value("score"));
     CHECK(*runtime.state_value("score") == 3);
+}
+
+TEST_CASE("GameManifest 0.6 compiles bounded content foundations without runtime extension points") {
+    const auto plan = ai2d::compile_game_file(content_foundations_manifest());
+    REQUIRE(plan);
+    CHECK(plan->schema_version == ai2d::GameSchemaVersion::v0_6);
+    CHECK(plan->schema_version_text() == "0.6");
+    CHECK(plan->animations.size() == 2U);
+    CHECK(plan->prefabs.size() == 1U);
+    CHECK(plan->localizations.size() == 2U);
+    CHECK(plan->input_profiles.size() == 2U);
+    CHECK(plan->save.enabled);
+    CHECK(plan->save.slot_count == 2U);
+    REQUIRE(plan->scenes.size() == 1U);
+    const auto& scene = plan->scenes.front();
+    CHECK(scene.persistent);
+    CHECK(scene.tile_layers.size() == 1U);
+    CHECK(scene.fields.size() == 1U);
+    CHECK(scene.particle_emitters.size() == 1U);
+    CHECK(scene.ui_stacks.size() == 1U);
+    CHECK(scene.camera.mode == ai2d::GameCameraMode::follow);
+    REQUIRE(ai2d::validate_game_plan(*plan));
+}
+
+TEST_CASE("Version 0.6 plan identity is independent of its installation root") {
+    const auto source = ai2d::compile_game_file(content_foundations_manifest());
+    REQUIRE(source);
+    const auto copied_root = copy_game_fixture(
+        content_foundations_manifest(), "ai2d-v06-relocated-content-identity");
+    const auto relocated = ai2d::compile_game_file(copied_root / "game.json");
+    REQUIRE(relocated);
+    CHECK(relocated->source_hash == source->source_hash);
+    CHECK(relocated->plan_hash == source->plan_hash);
+    std::error_code error{};
+    std::filesystem::remove_all(copied_root, error);
+    CHECK_FALSE(error);
+}
+
+TEST_CASE("Version 0.6 preference names and public dependencies are safe path components") {
+    const auto fixture = copy_game_fixture(
+        content_foundations_manifest(), "ai2d-v06-unsafe-preference-name");
+    replace_text_in_file(fixture / "game.json", "\"organization\": \"AI2D\"", "\"organization\": \"..\"");
+    const auto rejected = ai2d::compile_game_file(fixture / "game.json");
+    REQUIRE_FALSE(rejected);
+    CHECK(rejected.error().code == ai2d::DiagnosticCode::game_manifest_invalid);
+    std::error_code error{};
+    std::filesystem::remove_all(fixture, error);
+    CHECK_FALSE(error);
+
+    const auto compiled = ai2d::compile_game_file(content_foundations_manifest());
+    REQUIRE(compiled);
+    auto direct = *compiled;
+    direct.symbols[direct.organization] = "CON";
+    direct.plan_hash = ai2d::compute_game_plan_hash(direct);
+    REQUIRE_FALSE(ai2d::validate_game_plan(direct));
+}
+
+TEST_CASE("Version 0.6 anchor and stack resolution stores element centers") {
+    const auto plan = ai2d::compile_game_file(content_foundations_manifest());
+    REQUIRE(plan);
+    const auto& scene = plan->scenes.front();
+    REQUIRE(scene.ui.size() == 2U);
+    CHECK(scene.ui[0U].position.x == Catch::Approx(157.0F));
+    CHECK(scene.ui[0U].position.y == Catch::Approx(44.0F));
+    CHECK(scene.ui[1U].position.x == Catch::Approx(463.0F));
+    CHECK(scene.ui[1U].position.y == Catch::Approx(44.0F));
+    REQUIRE(ai2d::validate_game_plan(*plan));
+
+    auto invalid = *plan;
+    invalid.scenes.front().ui[0U].position.x = -100.0F;
+    invalid.plan_hash = ai2d::compute_game_plan_hash(invalid);
+    const auto result = ai2d::validate_game_plan(invalid);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == ai2d::DiagnosticCode::game_presentation_invalid);
+}
+
+TEST_CASE("Version 0.6 rejects zero axis deadzones and more than two axes") {
+    const auto compiled = ai2d::compile_game_file(content_foundations_manifest());
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto& action = plan.input_profiles[1U].actions[0U];
+    REQUIRE(action.gamepad_axis_count == 1U);
+    action.gamepad_axes[0U].deadzone = 0.0F;
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    const auto zero = ai2d::validate_game_plan(plan);
+    REQUIRE_FALSE(zero);
+    CHECK(zero.error().code == ai2d::DiagnosticCode::game_input_profile_invalid);
+}
+
+TEST_CASE("Public GamePlan validation preserves bounded 0.6 invariants") {
+    const auto compiled = ai2d::compile_game_file(content_foundations_manifest());
+    REQUIRE(compiled);
+
+    auto invalid_animation = *compiled;
+    invalid_animation.animations.front().frames.front().duration_ticks = 0U;
+    invalid_animation.plan_hash = ai2d::compute_game_plan_hash(invalid_animation);
+    const auto animation_result = ai2d::validate_game_plan(invalid_animation);
+    REQUIRE_FALSE(animation_result);
+    CHECK(animation_result.error().code == ai2d::DiagnosticCode::game_animation_invalid);
+
+    auto invalid_tiles = *compiled;
+    invalid_tiles.scenes.front().tile_layers.front().initial_cells.pop_back();
+    invalid_tiles.plan_hash = ai2d::compute_game_plan_hash(invalid_tiles);
+    const auto tile_result = ai2d::validate_game_plan(invalid_tiles);
+    REQUIRE_FALSE(tile_result);
+    CHECK(tile_result.error().code == ai2d::DiagnosticCode::game_tile_field_invalid);
+
+    auto invalid_profile = *compiled;
+    invalid_profile.input_profiles.front().actions.pop_back();
+    invalid_profile.plan_hash = ai2d::compute_game_plan_hash(invalid_profile);
+    const auto profile_result = ai2d::validate_game_plan(invalid_profile);
+    REQUIRE_FALSE(profile_result);
+    CHECK(profile_result.error().code == ai2d::DiagnosticCode::game_input_profile_invalid);
+
+    auto invalid_camera = *compiled;
+    invalid_camera.scenes.front().camera.follow_group_index =
+        static_cast<std::uint32_t>(invalid_camera.scenes.front().spawn_groups.size());
+    invalid_camera.plan_hash = ai2d::compute_game_plan_hash(invalid_camera);
+    const auto camera_result = ai2d::validate_game_plan(invalid_camera);
+    REQUIRE_FALSE(camera_result);
+    CHECK(camera_result.error().code == ai2d::DiagnosticCode::game_presentation_invalid);
+
+    auto invalid_prefab = *compiled;
+    invalid_prefab.prefabs.front().has_sprite = false;
+    invalid_prefab.prefabs.front().has_animation = true;
+    invalid_prefab.plan_hash = ai2d::compute_game_plan_hash(invalid_prefab);
+    const auto prefab_result = ai2d::validate_game_plan(invalid_prefab);
+    REQUIRE_FALSE(prefab_result);
+    CHECK(prefab_result.error().code == ai2d::DiagnosticCode::game_prefab_invalid);
+}
+
+TEST_CASE("Game-wide content storage limits bound retained scene snapshots") {
+    const auto compiled = ai2d::compile_game_file(content_foundations_manifest());
+    REQUIRE(compiled);
+
+    SECTION("tile and field cells") {
+        auto plan = *compiled;
+        auto scene = plan.scenes.front();
+        scene.grids.front().columns = 256U;
+        scene.grids.front().rows = 256U;
+        scene.tile_layers.front().initial_cells.assign(256U * 256U, 0U);
+        scene.fields.front().initial_cells.assign(256U * 256U, 0);
+        plan.scenes.clear();
+        for (std::uint32_t index = 0U; index < 31U; ++index) {
+            auto copy = scene;
+            copy.symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+            plan.symbols.push_back("bounded-cell-scene-" + std::to_string(index));
+            plan.scenes.push_back(std::move(copy));
+        }
+        plan.start_scene = 0U;
+        plan.transitions.clear();
+        plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+        const auto result = ai2d::validate_game_plan(plan);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ai2d::DiagnosticCode::game_tile_field_invalid);
+    }
+
+    SECTION("particle slots") {
+        auto plan = *compiled;
+        auto scene = plan.scenes.front();
+        const auto emitter = scene.particle_emitters.front();
+        scene.particle_emitters.clear();
+        for (std::uint32_t index = 0U; index < 5U; ++index) {
+            auto copy = emitter;
+            copy.symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+            plan.symbols.push_back("bounded-emitter-" + std::to_string(index));
+            copy.capacity = 10'000U;
+            scene.particle_emitters.push_back(std::move(copy));
+        }
+        plan.scenes.clear();
+        for (std::uint32_t index = 0U; index < 2U; ++index) {
+            auto copy = scene;
+            copy.symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+            plan.symbols.push_back("bounded-particle-scene-" + std::to_string(index));
+            plan.scenes.push_back(std::move(copy));
+        }
+        plan.start_scene = 0U;
+        plan.transitions.clear();
+        plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+        REQUIRE(ai2d::validate_game_plan(plan));
+
+        auto third = scene;
+        third.symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+        plan.symbols.push_back("bounded-particle-scene-2");
+        plan.scenes.push_back(std::move(third));
+        plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+        const auto result = ai2d::validate_game_plan(plan);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ai2d::DiagnosticCode::game_presentation_invalid);
+    }
+
+    SECTION("encoded save payload") {
+        auto plan = *compiled;
+        auto scene = plan.scenes.front();
+        REQUIRE(scene.spawn_groups.size() == 1U);
+        scene.world_capacity = ai2d::GameScenePlan::max_world_capacity;
+        scene.total_spawn_count = ai2d::GameScenePlan::max_world_capacity;
+        scene.spawn_groups.front().count = ai2d::GameScenePlan::max_world_capacity;
+        plan.scenes.clear();
+        for (std::uint32_t index = 0U; index < ai2d::GamePlan::max_scenes; ++index) {
+            auto copy = scene;
+            copy.symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+            plan.symbols.push_back("bounded-save-scene-" + std::to_string(index));
+            plan.scenes.push_back(std::move(copy));
+        }
+        plan.start_scene = 0U;
+        plan.transitions.clear();
+        plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+        const auto result = ai2d::validate_game_plan(plan);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ai2d::DiagnosticCode::game_save_invalid);
+    }
+}
+
+TEST_CASE("Localized UI capacity uses the largest active locale instead of summing every locale") {
+    const auto compiled = ai2d::compile_game_file(content_foundations_manifest());
+    REQUIRE(compiled);
+
+    auto plan = *compiled;
+    const auto reference = plan.localizations.front();
+    plan.localizations.clear();
+    plan.localizations.reserve(ai2d::GamePlan::max_localizations);
+    for (std::uint32_t index = 0U; index < ai2d::GamePlan::max_localizations; ++index) {
+        auto locale = reference;
+        locale.locale = static_cast<ai2d::SymbolId>(plan.symbols.size());
+        plan.symbols.push_back("stress-locale-" + std::to_string(index));
+        for (std::size_t entry_index = 0U; entry_index < locale.entries.size(); ++entry_index) {
+            locale.entries[entry_index].value = static_cast<ai2d::SymbolId>(plan.symbols.size());
+            plan.symbols.push_back(
+                std::string(4'000U, 'A') + std::to_string(index) + "-" + std::to_string(entry_index));
+        }
+        plan.localizations.push_back(std::move(locale));
+    }
+    plan.default_locale_index = 0U;
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+
+    REQUIRE(ai2d::validate_game_plan(plan));
 }
 
 #if defined(AI2D_ENABLE_GPU)

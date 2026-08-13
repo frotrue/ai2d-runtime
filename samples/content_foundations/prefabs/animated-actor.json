@@ -1,0 +1,7 @@
+{
+  "schema_version": "1",
+  "transform": {"scale": [1, 1]},
+  "velocity": {"linear": [0, 0]},
+  "sprite": {"texture": "sprites", "size": [0.9, 0.9], "uv": [0, 0, 0.25, 1], "layer": 20},
+  "animation": {"clip": "pulse", "autoplay": true}
+}

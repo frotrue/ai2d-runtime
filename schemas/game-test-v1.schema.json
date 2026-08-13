@@ -4,27 +4,496 @@
   "title": "AI2D deterministic game test v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "frames", "events", "assertions"],
+  "required": [
+    "schema_version",
+    "frames",
+    "events",
+    "assertions"
+  ],
   "properties": {
-    "schema_version": {"const": "1"},
-    "frames": {"type": "integer", "minimum": 1, "maximum": 1000000},
-    "events": {"type": "array", "maxItems": 1000000, "items": {"$ref": "#/$defs/input_event"}},
-    "assertions": {"type": "array", "maxItems": 4096, "items": {"$ref": "#/$defs/assertion"}}
+    "schema_version": {
+      "const": "1"
+    },
+    "frames": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "events": {
+      "type": "array",
+      "maxItems": 1000000,
+      "items": {
+        "$ref": "#/$defs/input_event"
+      }
+    },
+    "assertions": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/assertion"
+      }
+    }
   },
   "$defs": {
-    "id": {"type": "string", "minLength": 1, "maxLength": 256},
-    "tick": {"type": "integer", "minimum": 0, "maximum": 999999},
-    "comparison": {"enum": ["eq", "ne", "lt", "le", "gt", "ge"]},
-    "number": {"type": "number", "minimum": -3.4028234663852886e38, "maximum": 3.4028234663852886e38},
-    "vec2": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"}], "items": false},
-    "input_event": {"type": "object", "additionalProperties": false, "required": ["tick", "action", "kind"], "properties": {"tick": {"$ref": "#/$defs/tick"}, "action": {"$ref": "#/$defs/id"}, "kind": {"enum": ["press", "release", "tap"]}}},
-    "assertion": {"oneOf": [
-      {"type": "object", "additionalProperties": false, "required": ["tick", "kind", "scene"], "properties": {"tick": {"$ref": "#/$defs/tick"}, "kind": {"const": "current_scene"}, "scene": {"$ref": "#/$defs/id"}}},
-      {"type": "object", "additionalProperties": false, "required": ["tick", "kind", "state", "op", "value"], "properties": {"tick": {"$ref": "#/$defs/tick"}, "kind": {"const": "int_state"}, "state": {"$ref": "#/$defs/id"}, "op": {"$ref": "#/$defs/comparison"}, "value": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}}},
-      {"type": "object", "additionalProperties": false, "required": ["tick", "kind", "scene", "group", "op", "value"], "properties": {"tick": {"$ref": "#/$defs/tick"}, "kind": {"const": "group_active_count"}, "scene": {"$ref": "#/$defs/id"}, "group": {"$ref": "#/$defs/id"}, "op": {"$ref": "#/$defs/comparison"}, "value": {"type": "integer", "minimum": 0}}},
-      {"type": "object", "additionalProperties": false, "required": ["tick", "kind", "scene", "group", "index", "active"], "properties": {"tick": {"$ref": "#/$defs/tick"}, "kind": {"const": "entity_active"}, "scene": {"$ref": "#/$defs/id"}, "group": {"$ref": "#/$defs/id"}, "index": {"type": "integer", "minimum": 0}, "active": {"type": "boolean"}}},
-      {"type": "object", "additionalProperties": false, "required": ["tick", "kind", "scene", "group", "index", "expected"], "properties": {"tick": {"$ref": "#/$defs/tick"}, "kind": {"enum": ["position", "velocity"]}, "scene": {"$ref": "#/$defs/id"}, "group": {"$ref": "#/$defs/id"}, "index": {"type": "integer", "minimum": 0}, "expected": {"$ref": "#/$defs/vec2"}, "tolerance": {"type": "number", "minimum": 0, "maximum": 1}}},
-      {"type": "object", "additionalProperties": false, "required": ["tick", "kind", "metric", "op", "value"], "properties": {"tick": {"$ref": "#/$defs/tick"}, "kind": {"const": "runtime_metric"}, "metric": {"enum": ["rule_executions", "condition_evaluations", "action_executions", "grid_steps", "rejected_direction_changes", "follower_updates", "active_state_changes", "relocations", "relocation_cells_scanned", "collision_contacts", "trigger_narrowphase_tests", "contact_begins", "contact_ends", "stale_contact_events", "active_contact_pairs", "peak_contact_pairs", "motion_segments", "linear_motion_updates", "pool_acquire_attempts", "pool_acquire_successes", "pool_releases", "pool_release_misses", "pool_exhaustions", "pool_recycled_slots", "pool_expirations", "pool_resets", "pool_lifetime_checks", "active_pooled_entities", "peak_active_pooled_entities"]}, "op": {"$ref": "#/$defs/comparison"}, "value": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}}}
-    ]}
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "tick": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 999999
+    },
+    "comparison": {
+      "enum": [
+        "eq",
+        "ne",
+        "lt",
+        "le",
+        "gt",
+        "ge"
+      ]
+    },
+    "number": {
+      "type": "number",
+      "minimum": -3.4028234663852886e+38,
+      "maximum": 3.4028234663852886e+38
+    },
+    "vec2": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/number"
+        },
+        {
+          "$ref": "#/$defs/number"
+        }
+      ],
+      "items": false
+    },
+    "input_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tick",
+        "action",
+        "kind"
+      ],
+      "properties": {
+        "tick": {
+          "$ref": "#/$defs/tick"
+        },
+        "action": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "press",
+            "release",
+            "tap"
+          ]
+        }
+      }
+    },
+    "assertion": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tick",
+            "kind",
+            "scene"
+          ],
+          "properties": {
+            "tick": {
+              "$ref": "#/$defs/tick"
+            },
+            "kind": {
+              "const": "current_scene"
+            },
+            "scene": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tick",
+            "kind",
+            "state",
+            "op",
+            "value"
+          ],
+          "properties": {
+            "tick": {
+              "$ref": "#/$defs/tick"
+            },
+            "kind": {
+              "const": "int_state"
+            },
+            "state": {
+              "$ref": "#/$defs/id"
+            },
+            "op": {
+              "$ref": "#/$defs/comparison"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tick",
+            "kind",
+            "scene",
+            "group",
+            "op",
+            "value"
+          ],
+          "properties": {
+            "tick": {
+              "$ref": "#/$defs/tick"
+            },
+            "kind": {
+              "const": "group_active_count"
+            },
+            "scene": {
+              "$ref": "#/$defs/id"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            },
+            "op": {
+              "$ref": "#/$defs/comparison"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tick",
+            "kind",
+            "scene",
+            "group",
+            "index",
+            "active"
+          ],
+          "properties": {
+            "tick": {
+              "$ref": "#/$defs/tick"
+            },
+            "kind": {
+              "const": "entity_active"
+            },
+            "scene": {
+              "$ref": "#/$defs/id"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "active": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tick",
+            "kind",
+            "scene",
+            "group",
+            "index",
+            "expected"
+          ],
+          "properties": {
+            "tick": {
+              "$ref": "#/$defs/tick"
+            },
+            "kind": {
+              "enum": [
+                "position",
+                "velocity"
+              ]
+            },
+            "scene": {
+              "$ref": "#/$defs/id"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "expected": {
+              "$ref": "#/$defs/vec2"
+            },
+            "tolerance": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tick",
+            "kind",
+            "metric",
+            "op",
+            "value"
+          ],
+          "properties": {
+            "tick": {
+              "$ref": "#/$defs/tick"
+            },
+            "kind": {
+              "const": "runtime_metric"
+            },
+            "metric": {
+              "enum": [
+                "rule_executions",
+                "condition_evaluations",
+                "action_executions",
+                "grid_steps",
+                "rejected_direction_changes",
+                "follower_updates",
+                "active_state_changes",
+                "relocations",
+                "relocation_cells_scanned",
+                "collision_contacts",
+                "trigger_narrowphase_tests",
+                "contact_begins",
+                "contact_ends",
+                "stale_contact_events",
+                "active_contact_pairs",
+                "peak_contact_pairs",
+                "motion_segments",
+                "linear_motion_updates",
+                "pool_acquire_attempts",
+                "pool_acquire_successes",
+                "pool_releases",
+                "pool_release_misses",
+                "pool_exhaustions",
+                "pool_recycled_slots",
+                "pool_expirations",
+                "pool_resets",
+                "pool_lifetime_checks",
+                "active_pooled_entities",
+                "peak_active_pooled_entities",
+                "animation_frame_updates",
+                "animation_completions",
+                "tile_reads",
+                "tile_writes",
+                "field_reads",
+                "field_writes",
+                "save_attempts",
+                "save_successes",
+                "save_failures",
+                "particle_emits",
+                "particle_updates",
+                "particle_exhaustions",
+                "particle_slot_operations",
+                "peak_active_particles",
+                "camera_follow_updates",
+                "camera_shake_updates",
+                "music_stream_bytes",
+                "music_underruns",
+                "input_profile_switches",
+                "locale_switches"
+              ]
+            },
+            "op": {
+              "$ref": "#/$defs/comparison"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709552000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tick",
+            "kind",
+            "scene",
+            "group",
+            "index",
+            "op",
+            "value"
+          ],
+          "properties": {
+            "tick": {
+              "$ref": "#/$defs/tick"
+            },
+            "kind": {
+              "const": "animation_frame"
+            },
+            "scene": {
+              "$ref": "#/$defs/id"
+            },
+            "group": {
+              "$ref": "#/$defs/id"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "op": {
+              "$ref": "#/$defs/comparison"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tick",
+            "kind",
+            "scene",
+            "layer",
+            "x",
+            "y",
+            "op",
+            "value"
+          ],
+          "properties": {
+            "tick": {
+              "$ref": "#/$defs/tick"
+            },
+            "kind": {
+              "const": "tile_value"
+            },
+            "scene": {
+              "$ref": "#/$defs/id"
+            },
+            "layer": {
+              "$ref": "#/$defs/id"
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "op": {
+              "$ref": "#/$defs/comparison"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tick",
+            "kind",
+            "scene",
+            "field",
+            "x",
+            "y",
+            "op",
+            "value"
+          ],
+          "properties": {
+            "tick": {
+              "$ref": "#/$defs/tick"
+            },
+            "kind": {
+              "const": "field_value"
+            },
+            "scene": {
+              "$ref": "#/$defs/id"
+            },
+            "field": {
+              "$ref": "#/$defs/id"
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "op": {
+              "$ref": "#/$defs/comparison"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tick",
+            "kind",
+            "scene",
+            "expected"
+          ],
+          "properties": {
+            "tick": {
+              "$ref": "#/$defs/tick"
+            },
+            "kind": {
+              "const": "camera_position"
+            },
+            "scene": {
+              "$ref": "#/$defs/id"
+            },
+            "expected": {
+              "$ref": "#/$defs/vec2"
+            },
+            "tolerance": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      ]
+    }
   }
 }

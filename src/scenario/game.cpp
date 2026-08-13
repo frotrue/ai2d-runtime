@@ -1,5 +1,7 @@
 #include "ai2d/scenario/game.hpp"
 
+#include "ai2d/foundation/preference_path.hpp"
+
 #include "ai2d/foundation/json_writer.hpp"
 
 #include <nlohmann/json.hpp>
@@ -26,6 +28,12 @@ namespace ai2d {
 namespace {
 
 using Json = nlohmann::json;
+
+struct PrefabSource final {
+    std::string id{};
+    std::filesystem::path path{};
+    Json document{};
+};
 
 Diagnostic game_error(
     const DiagnosticCode code,
@@ -255,6 +263,31 @@ Result<float> number(
     return static_cast<float>(converted);
 }
 
+Result<std::int32_t> integer_number(
+    const Json& value,
+    const std::int32_t minimum,
+    const std::int32_t maximum,
+    const std::string_view source,
+    const std::string_view pointer,
+    const DiagnosticCode code) {
+    if (!value.is_number_integer() && !value.is_number_unsigned()) {
+        return std::unexpected(game_error(code, "Expected an integer", source, pointer));
+    }
+    if (value.is_number_unsigned()) {
+        const auto converted = value.get<std::uint64_t>();
+        if (maximum < 0 || converted > static_cast<std::uint64_t>(maximum) ||
+            (minimum > 0 && converted < static_cast<std::uint64_t>(minimum))) {
+            return std::unexpected(game_error(code, "Integer is outside the supported range", source, pointer));
+        }
+        return static_cast<std::int32_t>(converted);
+    }
+    const auto converted = value.get<std::int64_t>();
+    if (converted < minimum || converted > maximum) {
+        return std::unexpected(game_error(code, "Integer is outside the supported range", source, pointer));
+    }
+    return static_cast<std::int32_t>(converted);
+}
+
 Result<Vec2> vec2(
     const Json& value,
     const std::string_view source,
@@ -448,6 +481,22 @@ bool path_is_within(const std::filesystem::path& root, const std::filesystem::pa
     return first != "..";
 }
 
+bool canonical_content_file(
+    const std::filesystem::path& root,
+    const std::filesystem::path& candidate) {
+    if (root.empty() || candidate.empty()) return false;
+    std::error_code error{};
+    const auto canonical_root = std::filesystem::weakly_canonical(root, error);
+    if (error || canonical_root != root.lexically_normal() ||
+        !std::filesystem::is_directory(canonical_root, error) || error) {
+        return false;
+    }
+    const auto canonical_candidate = std::filesystem::weakly_canonical(candidate, error);
+    return !error && canonical_candidate == candidate.lexically_normal() &&
+           path_is_within(canonical_root, canonical_candidate) &&
+           std::filesystem::is_regular_file(canonical_candidate, error) && !error;
+}
+
 Result<std::filesystem::path> resolve_content_path(
     const std::filesystem::path& root,
     const std::string_view raw,
@@ -506,7 +555,8 @@ Result<GameSchemaVersion> parse_game_schema_version(
     if (value == GamePlan::legacy_schema_version) return GameSchemaVersion::v0_2;
     if (value == GamePlan::event_action_schema_version) return GameSchemaVersion::v0_3;
     if (value == GamePlan::object_pool_schema_version) return GameSchemaVersion::v0_4;
-    if (value == GamePlan::supported_schema_version) return GameSchemaVersion::v0_5;
+    if (value == GamePlan::motion_contacts_schema_version) return GameSchemaVersion::v0_5;
+    if (value == GamePlan::supported_schema_version) return GameSchemaVersion::v0_6;
     return std::unexpected(game_error(code, "Unsupported game schema version", source, pointer));
 }
 
@@ -547,11 +597,93 @@ Result<GameKey> parse_key(
     if (value == "down") return GameKey::down;
     if (value == "a") return GameKey::a;
     if (value == "d") return GameKey::d;
+    if (value == "w") return GameKey::w;
+    if (value == "s") return GameKey::s;
+    if (value == "q") return GameKey::q;
+    if (value == "e") return GameKey::e;
+    if (value == "r") return GameKey::r;
+    if (value == "f") return GameKey::f;
+    if (value == "left_shift") return GameKey::left_shift;
+    if (value == "left_control") return GameKey::left_control;
     if (value == "space") return GameKey::space;
     if (value == "enter") return GameKey::enter;
     if (value == "tab") return GameKey::tab;
     return std::unexpected(game_error(
         DiagnosticCode::game_manifest_invalid, "Unsupported input key", source, pointer));
+}
+
+Result<GamepadButton> parse_gamepad_button(
+    const std::string_view value,
+    const std::string_view source,
+    const std::string_view pointer) {
+    if (value == "south") return GamepadButton::south;
+    if (value == "east") return GamepadButton::east;
+    if (value == "west") return GamepadButton::west;
+    if (value == "north") return GamepadButton::north;
+    if (value == "back") return GamepadButton::back;
+    if (value == "start") return GamepadButton::start;
+    if (value == "left_stick") return GamepadButton::left_stick;
+    if (value == "right_stick") return GamepadButton::right_stick;
+    if (value == "left_shoulder") return GamepadButton::left_shoulder;
+    if (value == "right_shoulder") return GamepadButton::right_shoulder;
+    if (value == "dpad_up") return GamepadButton::dpad_up;
+    if (value == "dpad_down") return GamepadButton::dpad_down;
+    if (value == "dpad_left") return GamepadButton::dpad_left;
+    if (value == "dpad_right") return GamepadButton::dpad_right;
+    return std::unexpected(game_error(
+        DiagnosticCode::game_input_profile_invalid, "Unsupported gamepad button", source, pointer));
+}
+
+Result<GamepadAxis> parse_gamepad_axis(
+    const std::string_view value,
+    const std::string_view source,
+    const std::string_view pointer) {
+    if (value == "left_x") return GamepadAxis::left_x;
+    if (value == "left_y") return GamepadAxis::left_y;
+    if (value == "right_x") return GamepadAxis::right_x;
+    if (value == "right_y") return GamepadAxis::right_y;
+    if (value == "left_trigger") return GamepadAxis::left_trigger;
+    if (value == "right_trigger") return GamepadAxis::right_trigger;
+    return std::unexpected(game_error(
+        DiagnosticCode::game_input_profile_invalid, "Unsupported gamepad axis", source, pointer));
+}
+
+Result<GameUiAnchor> parse_ui_anchor(
+    const std::string_view value,
+    const std::string_view source,
+    const std::string_view pointer) {
+    if (value == "top_left") return GameUiAnchor::top_left;
+    if (value == "top") return GameUiAnchor::top;
+    if (value == "top_right") return GameUiAnchor::top_right;
+    if (value == "left") return GameUiAnchor::left;
+    if (value == "center") return GameUiAnchor::center;
+    if (value == "right") return GameUiAnchor::right;
+    if (value == "bottom_left") return GameUiAnchor::bottom_left;
+    if (value == "bottom") return GameUiAnchor::bottom;
+    if (value == "bottom_right") return GameUiAnchor::bottom_right;
+    return std::unexpected(game_error(
+        DiagnosticCode::game_presentation_invalid, "Unsupported UI anchor", source, pointer));
+}
+
+Vec2 anchored_ui_center(
+    const GameUiAnchor anchor,
+    const Vec2 size,
+    const float width,
+    const float height) noexcept {
+    const float half_width = size.x * 0.5F;
+    const float half_height = size.y * 0.5F;
+    switch (anchor) {
+    case GameUiAnchor::top_left: return {half_width, half_height};
+    case GameUiAnchor::top: return {width * 0.5F, half_height};
+    case GameUiAnchor::top_right: return {width - half_width, half_height};
+    case GameUiAnchor::left: return {half_width, height * 0.5F};
+    case GameUiAnchor::center: return {width * 0.5F, height * 0.5F};
+    case GameUiAnchor::right: return {width - half_width, height * 0.5F};
+    case GameUiAnchor::bottom_left: return {half_width, height - half_height};
+    case GameUiAnchor::bottom: return {width * 0.5F, height - half_height};
+    case GameUiAnchor::bottom_right: return {width - half_width, height - half_height};
+    }
+    return {half_width, half_height};
 }
 
 Result<std::uint32_t> index_by_name(
@@ -662,7 +794,8 @@ Result<GameAssetPlan> parse_asset(
     const std::size_t index,
     const std::filesystem::path& root,
     Symbols& symbols,
-    const std::string_view source) {
+    const std::string_view source,
+    const bool version_0_6) {
     const auto pointer = "/assets/" + std::to_string(index);
     if (auto rejected = reject_unknown(object, {"id", "kind", "path", "metadata"}, source, pointer); !rejected) {
         return std::unexpected(std::move(rejected.error()));
@@ -690,6 +823,12 @@ Result<GameAssetPlan> parse_asset(
         if (optional(object, "metadata") != nullptr) {
             return std::unexpected(game_error(
                 DiagnosticCode::game_manifest_invalid, "WAV assets cannot declare metadata", source, pointer + "/metadata"));
+        }
+    } else if (*kind == "music" && version_0_6) {
+        plan.kind = GameAssetKind::music;
+        if (optional(object, "metadata") != nullptr) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_manifest_invalid, "Music assets cannot declare metadata", source, pointer + "/metadata"));
         }
     } else if (*kind == "font") {
         plan.kind = GameAssetKind::font;
@@ -744,6 +883,289 @@ Result<ActionPlan> parse_action(
             if (!key) return std::unexpected(std::move(key.error()));
             plan.keys[plan.key_count++] = *key;
         }
+    }
+    return plan;
+}
+
+Result<GameAnimationPlan> parse_animation(
+    const Json& object,
+    const std::size_t index,
+    const std::unordered_map<std::string, std::uint32_t>& assets,
+    const std::vector<GameAssetPlan>& asset_plans,
+    Symbols& symbols,
+    const std::string_view source) {
+    const auto pointer = "/animations/" + std::to_string(index);
+    if (auto rejected = reject_unknown(
+            object, {"id", "texture", "mode", "frames"}, source, pointer,
+            DiagnosticCode::game_animation_invalid);
+        !rejected) {
+        return std::unexpected(std::move(rejected.error()));
+    }
+    auto id = string_value(object, "id", source, pointer, DiagnosticCode::game_animation_invalid);
+    if (!id) return std::unexpected(std::move(id.error()));
+    auto texture = string_value(object, "texture", source, pointer, DiagnosticCode::game_animation_invalid);
+    if (!texture) return std::unexpected(std::move(texture.error()));
+    auto asset_index = index_by_name(
+        assets, *texture, "texture asset", source, pointer + "/texture", DiagnosticCode::game_animation_invalid);
+    if (!asset_index) return std::unexpected(std::move(asset_index.error()));
+    if (asset_plans[*asset_index].kind != GameAssetKind::png &&
+        asset_plans[*asset_index].kind != GameAssetKind::font) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_animation_invalid, "Animation texture must be a PNG or font asset", source,
+            pointer + "/texture"));
+    }
+    auto mode = string_value(object, "mode", source, pointer, DiagnosticCode::game_animation_invalid);
+    if (!mode) return std::unexpected(std::move(mode.error()));
+    GameAnimationMode parsed_mode{};
+    if (*mode == "once") parsed_mode = GameAnimationMode::once;
+    else if (*mode == "loop") parsed_mode = GameAnimationMode::loop;
+    else if (*mode == "ping_pong") parsed_mode = GameAnimationMode::ping_pong;
+    else {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_animation_invalid, "Animation mode must be once, loop, or ping_pong", source,
+            pointer + "/mode"));
+    }
+    auto frames = required(object, "frames", source, pointer, DiagnosticCode::game_animation_invalid);
+    if (!frames) return std::unexpected(std::move(frames.error()));
+    if (!(*frames)->is_array() || (*frames)->empty() || (*frames)->size() > GameAnimationPlan::max_frames) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_animation_invalid, "Animation frames must be a non-empty bounded array", source,
+            pointer + "/frames"));
+    }
+    GameAnimationPlan plan{};
+    plan.symbol = symbols.intern(std::move(*id));
+    plan.asset_index = *asset_index;
+    plan.mode = parsed_mode;
+    plan.frames.reserve((*frames)->size());
+    for (std::size_t frame_index = 0U; frame_index < (*frames)->size(); ++frame_index) {
+        const auto& frame = (**frames)[frame_index];
+        const auto frame_pointer = pointer + "/frames/" + std::to_string(frame_index);
+        if (auto rejected = reject_unknown(
+                frame, {"uv", "duration_ticks"}, source, frame_pointer,
+                DiagnosticCode::game_animation_invalid);
+            !rejected) {
+            return std::unexpected(std::move(rejected.error()));
+        }
+        auto uv_member = required(frame, "uv", source, frame_pointer, DiagnosticCode::game_animation_invalid);
+        if (!uv_member) return std::unexpected(std::move(uv_member.error()));
+        auto uv = rect4(**uv_member, source, frame_pointer + "/uv", DiagnosticCode::game_animation_invalid);
+        if (!uv) return std::unexpected(std::move(uv.error()));
+        if (uv->min.x < 0.0F || uv->min.y < 0.0F || uv->max.x <= 0.0F || uv->max.y <= 0.0F ||
+            uv->min.x + uv->max.x > 1.0001F || uv->min.y + uv->max.y > 1.0001F) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_animation_invalid, "Animation frame UV rectangle is invalid", source,
+                frame_pointer + "/uv"));
+        }
+        auto duration = u32_value(
+            frame, "duration_ticks", 1U, 1'000'000U, source, frame_pointer,
+            DiagnosticCode::game_animation_invalid);
+        if (!duration) return std::unexpected(std::move(duration.error()));
+        plan.frames.push_back({*uv, *duration});
+    }
+    return plan;
+}
+
+Result<GameInputProfilePlan> parse_input_profile(
+    const Json& object,
+    const std::size_t index,
+    const std::unordered_map<std::string, std::uint32_t>& actions,
+    const std::vector<ActionPlan>& base_actions,
+    Symbols& symbols,
+    const std::string_view source) {
+    const auto pointer = "/input_profiles/" + std::to_string(index);
+    if (auto rejected = reject_unknown(
+            object, {"id", "bindings"}, source, pointer, DiagnosticCode::game_input_profile_invalid);
+        !rejected) {
+        return std::unexpected(std::move(rejected.error()));
+    }
+    auto id = string_value(object, "id", source, pointer, DiagnosticCode::game_input_profile_invalid);
+    if (!id) return std::unexpected(std::move(id.error()));
+    auto bindings = required(object, "bindings", source, pointer, DiagnosticCode::game_input_profile_invalid);
+    if (!bindings) return std::unexpected(std::move(bindings.error()));
+    if (!(*bindings)->is_array() || (*bindings)->size() > base_actions.size()) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_input_profile_invalid, "Input profile bindings must be a bounded array", source,
+            pointer + "/bindings"));
+    }
+    GameInputProfilePlan plan{};
+    plan.symbol = symbols.intern(std::move(*id));
+    plan.actions = base_actions;
+    std::unordered_set<std::uint32_t> seen{};
+    for (std::size_t binding_index = 0U; binding_index < (*bindings)->size(); ++binding_index) {
+        const auto& binding = (**bindings)[binding_index];
+        const auto binding_pointer = pointer + "/bindings/" + std::to_string(binding_index);
+        if (auto rejected = reject_unknown(
+                binding, {"action", "keys", "mouse_left", "gamepad_buttons", "gamepad_axes"}, source,
+                binding_pointer, DiagnosticCode::game_input_profile_invalid);
+            !rejected) {
+            return std::unexpected(std::move(rejected.error()));
+        }
+        auto action = string_value(
+            binding, "action", source, binding_pointer, DiagnosticCode::game_input_profile_invalid);
+        if (!action) return std::unexpected(std::move(action.error()));
+        auto action_index = index_by_name(
+            actions, *action, "action", source, binding_pointer + "/action",
+            DiagnosticCode::game_input_profile_invalid);
+        if (!action_index) return std::unexpected(std::move(action_index.error()));
+        if (!seen.insert(*action_index).second) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_input_profile_invalid, "Input profile binds an action more than once", source,
+                binding_pointer + "/action"));
+        }
+        auto& output = plan.actions[*action_index];
+        if (const auto* keys = optional(binding, "keys"); keys != nullptr) {
+            if (!keys->is_array() || keys->size() > ActionPlan::max_keys) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_input_profile_invalid, "Profile keys exceed the bounded limit", source,
+                    binding_pointer + "/keys"));
+            }
+            output.key_count = 0U;
+            for (std::size_t key_index = 0U; key_index < keys->size(); ++key_index) {
+                if (!(*keys)[key_index].is_string()) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_input_profile_invalid, "Profile key must be a string", source,
+                        binding_pointer + "/keys/" + std::to_string(key_index)));
+                }
+                auto parsed = parse_key(
+                    (*keys)[key_index].get_ref<const std::string&>(), source,
+                    binding_pointer + "/keys/" + std::to_string(key_index));
+                if (!parsed) return std::unexpected(std::move(parsed.error()));
+                output.keys[output.key_count++] = *parsed;
+            }
+        }
+        if (optional(binding, "mouse_left") != nullptr) {
+            auto mouse = optional_bool(
+                binding, "mouse_left", false, source, binding_pointer,
+                DiagnosticCode::game_input_profile_invalid);
+            if (!mouse) return std::unexpected(std::move(mouse.error()));
+            output.mouse_left = *mouse;
+        }
+        if (const auto* buttons = optional(binding, "gamepad_buttons"); buttons != nullptr) {
+            if (!buttons->is_array() || buttons->size() > ActionPlan::max_gamepad_buttons) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_input_profile_invalid, "Gamepad buttons exceed the bounded limit", source,
+                    binding_pointer + "/gamepad_buttons"));
+            }
+            output.gamepad_button_count = 0U;
+            for (std::size_t button_index = 0U; button_index < buttons->size(); ++button_index) {
+                if (!(*buttons)[button_index].is_string()) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_input_profile_invalid, "Gamepad button must be a string", source,
+                        binding_pointer + "/gamepad_buttons/" + std::to_string(button_index)));
+                }
+                auto parsed = parse_gamepad_button(
+                    (*buttons)[button_index].get_ref<const std::string&>(), source,
+                    binding_pointer + "/gamepad_buttons/" + std::to_string(button_index));
+                if (!parsed) return std::unexpected(std::move(parsed.error()));
+                output.gamepad_buttons[output.gamepad_button_count++] = *parsed;
+            }
+        }
+        if (const auto* axes = optional(binding, "gamepad_axes"); axes != nullptr) {
+            if (!axes->is_array() || axes->size() > ActionPlan::max_gamepad_axes) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_input_profile_invalid, "Gamepad axes exceed the bounded limit", source,
+                    binding_pointer + "/gamepad_axes"));
+            }
+            output.gamepad_axis_count = 0U;
+            for (std::size_t axis_index = 0U; axis_index < axes->size(); ++axis_index) {
+                const auto& axis = (*axes)[axis_index];
+                const auto axis_pointer = binding_pointer + "/gamepad_axes/" + std::to_string(axis_index);
+                if (auto rejected = reject_unknown(
+                        axis, {"axis", "direction", "deadzone"}, source, axis_pointer,
+                        DiagnosticCode::game_input_profile_invalid);
+                    !rejected) {
+                    return std::unexpected(std::move(rejected.error()));
+                }
+                auto axis_name = string_value(
+                    axis, "axis", source, axis_pointer, DiagnosticCode::game_input_profile_invalid);
+                if (!axis_name) return std::unexpected(std::move(axis_name.error()));
+                auto parsed_axis = parse_gamepad_axis(*axis_name, source, axis_pointer + "/axis");
+                if (!parsed_axis) return std::unexpected(std::move(parsed_axis.error()));
+                auto direction = string_value(
+                    axis, "direction", source, axis_pointer, DiagnosticCode::game_input_profile_invalid);
+                if (!direction) return std::unexpected(std::move(direction.error()));
+                const std::int8_t parsed_direction = *direction == "positive" ? 1 : *direction == "negative" ? -1 : 0;
+                if (parsed_direction == 0) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_input_profile_invalid,
+                        "Gamepad axis direction must be positive or negative", source, axis_pointer + "/direction"));
+                }
+                auto deadzone = optional_number(
+                    axis, "deadzone", 0.25F, source, axis_pointer,
+                    DiagnosticCode::game_input_profile_invalid);
+                if (!deadzone) return std::unexpected(std::move(deadzone.error()));
+                if (*deadzone <= 0.0F || *deadzone > 0.95F) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_input_profile_invalid,
+                        "Gamepad axis deadzone must be greater than zero and at most 0.95", source,
+                        axis_pointer + "/deadzone"));
+                }
+                output.gamepad_axes[output.gamepad_axis_count++] = {*parsed_axis, parsed_direction, *deadzone};
+            }
+        }
+    }
+    return plan;
+}
+
+Result<GameLocalizationPlan> parse_localization(
+    const Json& declaration,
+    const std::size_t index,
+    const std::filesystem::path& root,
+    Symbols& symbols,
+    const std::string_view source,
+    std::string& source_text) {
+    const auto pointer = "/localizations/" + std::to_string(index);
+    if (auto rejected = reject_unknown(
+            declaration, {"locale", "path"}, source, pointer, DiagnosticCode::game_localization_invalid);
+        !rejected) {
+        return std::unexpected(std::move(rejected.error()));
+    }
+    auto locale = string_value(
+        declaration, "locale", source, pointer, DiagnosticCode::game_localization_invalid);
+    if (!locale) return std::unexpected(std::move(locale.error()));
+    auto raw_path = string_value(
+        declaration, "path", source, pointer, DiagnosticCode::game_localization_invalid);
+    if (!raw_path) return std::unexpected(std::move(raw_path.error()));
+    auto path = resolve_content_path(root, *raw_path, source, pointer + "/path");
+    if (!path) return std::unexpected(std::move(path.error()));
+    auto text = read_text_file(*path, 4U * 1024U * 1024U, DiagnosticCode::game_localization_invalid);
+    if (!text) return std::unexpected(std::move(text.error()));
+    source_text = *text;
+    auto document = parse_json(*text, path->string(), DiagnosticCode::game_localization_invalid);
+    if (!document) return std::unexpected(std::move(document.error()));
+    if (auto rejected = reject_unknown(
+            *document, {"schema_version", "strings"}, path->string(), "/",
+            DiagnosticCode::game_localization_invalid);
+        !rejected) {
+        return std::unexpected(std::move(rejected.error()));
+    }
+    auto version = string_value(
+        *document, "schema_version", path->string(), "/", DiagnosticCode::game_localization_invalid);
+    if (!version) return std::unexpected(std::move(version.error()));
+    if (*version != "1") {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_localization_invalid, "Unsupported localization version", path->string(),
+            "/schema_version"));
+    }
+    auto strings = required(*document, "strings", path->string(), "/", DiagnosticCode::game_localization_invalid);
+    if (!strings) return std::unexpected(std::move(strings.error()));
+    if (!(*strings)->is_object() || (*strings)->empty() || (*strings)->size() > 4'096U) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_localization_invalid, "Localization strings must be a non-empty bounded object",
+            path->string(), "/strings"));
+    }
+    GameLocalizationPlan plan{};
+    plan.locale = symbols.intern(std::move(*locale));
+    plan.path = std::move(*path);
+    plan.entries.reserve((*strings)->size());
+    for (const auto& [key, value] : (*strings)->items()) {
+        if (key.empty() || key.size() > 256U || !value.is_string() || value.get_ref<const std::string&>().empty() ||
+            value.get_ref<const std::string&>().size() > 4'096U) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_localization_invalid, "Localization key or value is invalid", plan.path.string(),
+                "/strings/" + key));
+        }
+        plan.entries.push_back({symbols.intern(key), symbols.intern(value.get<std::string>())});
     }
     return plan;
 }
@@ -806,16 +1228,23 @@ Result<GameSpawnGroupPlan> parse_spawn_group(
     const std::size_t index,
     const bool version_0_3,
     const bool version_0_5,
+    const bool version_0_6,
     const std::unordered_map<std::string, std::uint32_t>& assets,
     const std::vector<GameAssetPlan>& asset_plans,
+    const std::unordered_map<std::string, std::uint32_t>& animations,
+    const std::vector<GameAnimationPlan>& animation_plans,
     Symbols& symbols,
     const std::string_view source) {
     const auto pointer = "/spawn_groups/" + std::to_string(index);
     if (auto rejected = reject_unknown(
             object,
-            version_0_3
+            version_0_6
                 ? std::initializer_list<std::string_view>{
-                      "id", "count", "active_count", "placement", "transform", "velocity", "sprite", "collider"}
+                      "id", "count", "active_count", "placement", "transform", "velocity", "sprite", "collider",
+                      "animation"}
+                : version_0_3
+                    ? std::initializer_list<std::string_view>{
+                          "id", "count", "active_count", "placement", "transform", "velocity", "sprite", "collider"}
                 : std::initializer_list<std::string_view>{
                       "id", "count", "placement", "transform", "velocity", "sprite", "collider"},
             source,
@@ -892,7 +1321,8 @@ Result<GameSpawnGroupPlan> parse_spawn_group(
         auto asset_index = index_by_name(
             assets, *texture, "texture asset", source, pointer + "/sprite/texture", DiagnosticCode::game_scene_invalid);
         if (!asset_index) return std::unexpected(std::move(asset_index.error()));
-        if (asset_plans[*asset_index].kind == GameAssetKind::wav) {
+        if (asset_plans[*asset_index].kind != GameAssetKind::png &&
+            asset_plans[*asset_index].kind != GameAssetKind::font) {
             return std::unexpected(game_error(
                 DiagnosticCode::game_scene_invalid, "Sprite texture must reference a PNG or font asset", source,
                 pointer + "/sprite/texture"));
@@ -978,6 +1408,35 @@ Result<GameSpawnGroupPlan> parse_spawn_group(
         }
         plan.collider = {*offset, *half_extent, symbols.intern(std::move(*group)), motion, *trigger, *enabled};
         plan.has_collider = true;
+    }
+    if (const auto* animation = optional(object, "animation"); animation != nullptr) {
+        if (auto rejected = reject_unknown(
+                *animation, {"clip", "autoplay"}, source, pointer + "/animation",
+                DiagnosticCode::game_animation_invalid);
+            !rejected) {
+            return std::unexpected(std::move(rejected.error()));
+        }
+        if (!plan.has_sprite) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_animation_invalid, "Initial animation requires a sprite component", source,
+                pointer + "/animation"));
+        }
+        auto clip = string_value(
+            *animation, "clip", source, pointer + "/animation", DiagnosticCode::game_animation_invalid);
+        if (!clip) return std::unexpected(std::move(clip.error()));
+        auto animation_index = index_by_name(
+            animations, *clip, "animation", source, pointer + "/animation/clip",
+            DiagnosticCode::game_animation_invalid);
+        if (!animation_index) return std::unexpected(std::move(animation_index.error()));
+        auto autoplay = optional_bool(
+            *animation, "autoplay", true, source, pointer + "/animation",
+            DiagnosticCode::game_animation_invalid);
+        if (!autoplay) return std::unexpected(std::move(autoplay.error()));
+        plan.initial_animation_index = *animation_index;
+        plan.has_initial_animation = true;
+        plan.animation_autoplay = *autoplay;
+        plan.sprite.asset_index = animation_plans[*animation_index].asset_index;
+        plan.sprite.uv = animation_plans[*animation_index].frames.front().uv;
     }
     return plan;
 }
@@ -1471,12 +1930,302 @@ Result<GamePoolPlan> parse_pool(
     return GamePoolPlan{symbols.intern(std::move(*id)), *group_index, parsed_policy};
 }
 
+Result<GameSpritePlan> parse_presentation_sprite(
+    const Json& object,
+    const std::string_view pointer,
+    const std::unordered_map<std::string, std::uint32_t>& assets,
+    const std::vector<GameAssetPlan>& asset_plans,
+    const std::string_view source) {
+    if (auto rejected = reject_unknown(
+            object, {"texture", "size", "pivot", "uv", "tint", "layer", "visible"}, source, pointer,
+            DiagnosticCode::game_presentation_invalid);
+        !rejected) {
+        return std::unexpected(std::move(rejected.error()));
+    }
+    auto texture = string_value(
+        object, "texture", source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!texture) return std::unexpected(std::move(texture.error()));
+    auto asset_index = index_by_name(
+        assets, *texture, "texture asset", source, std::string{pointer} + "/texture",
+        DiagnosticCode::game_presentation_invalid);
+    if (!asset_index) return std::unexpected(std::move(asset_index.error()));
+    if (asset_plans[*asset_index].kind != GameAssetKind::png &&
+        asset_plans[*asset_index].kind != GameAssetKind::font) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_presentation_invalid, "Sprite must reference a PNG or font asset", source,
+            std::string{pointer} + "/texture"));
+    }
+    auto size_member = required(object, "size", source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!size_member) return std::unexpected(std::move(size_member.error()));
+    auto size = vec2(**size_member, source, std::string{pointer} + "/size", DiagnosticCode::game_presentation_invalid);
+    if (!size) return std::unexpected(std::move(size.error()));
+    auto pivot = optional_vec2(
+        object, "pivot", {0.5F, 0.5F}, source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!pivot) return std::unexpected(std::move(pivot.error()));
+    Rect uv{{0.0F, 0.0F}, {1.0F, 1.0F}};
+    if (const auto* uv_member = optional(object, "uv"); uv_member != nullptr) {
+        auto parsed = rect4(
+            *uv_member, source, std::string{pointer} + "/uv", DiagnosticCode::game_presentation_invalid);
+        if (!parsed) return std::unexpected(std::move(parsed.error()));
+        uv = *parsed;
+    }
+    auto tint = optional_color(
+        object, "tint", {}, source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!tint) return std::unexpected(std::move(tint.error()));
+    std::int32_t layer = 0;
+    if (optional(object, "layer") != nullptr) {
+        auto parsed = i32_value(
+            object, "layer", -1'000'000, 1'000'000, source, pointer,
+            DiagnosticCode::game_presentation_invalid);
+        if (!parsed) return std::unexpected(std::move(parsed.error()));
+        layer = *parsed;
+    }
+    auto visible = optional_bool(
+        object, "visible", true, source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!visible) return std::unexpected(std::move(visible.error()));
+    if (size->x <= 0.0F || size->y <= 0.0F || uv.min.x < 0.0F || uv.min.y < 0.0F || uv.max.x <= 0.0F ||
+        uv.max.y <= 0.0F || uv.min.x + uv.max.x > 1.0001F || uv.min.y + uv.max.y > 1.0001F) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_presentation_invalid, "Presentation sprite size or UV is invalid", source, pointer));
+    }
+    return GameSpritePlan{*asset_index, *size, *pivot, uv, *tint, layer, *visible};
+}
+
+Result<GameTileLayerPlan> parse_tile_layer(
+    const Json& object,
+    const std::size_t index,
+    const std::unordered_map<std::string, std::uint32_t>& grids,
+    const std::vector<GameGridPlan>& grid_plans,
+    const std::unordered_map<std::string, std::uint32_t>& assets,
+    const std::vector<GameAssetPlan>& asset_plans,
+    Symbols& symbols,
+    const std::string_view source) {
+    const auto pointer = "/tile_layers/" + std::to_string(index);
+    if (auto rejected = reject_unknown(
+            object, {"id", "grid", "texture", "atlas_columns", "atlas_rows", "fill", "cells", "tint", "layer", "visible"},
+            source, pointer, DiagnosticCode::game_tile_field_invalid);
+        !rejected) {
+        return std::unexpected(std::move(rejected.error()));
+    }
+    auto id = string_value(object, "id", source, pointer, DiagnosticCode::game_tile_field_invalid);
+    if (!id) return std::unexpected(std::move(id.error()));
+    auto grid = string_value(object, "grid", source, pointer, DiagnosticCode::game_tile_field_invalid);
+    if (!grid) return std::unexpected(std::move(grid.error()));
+    auto grid_index = index_by_name(
+        grids, *grid, "logical grid", source, pointer + "/grid", DiagnosticCode::game_tile_field_invalid);
+    if (!grid_index) return std::unexpected(std::move(grid_index.error()));
+    auto texture = string_value(object, "texture", source, pointer, DiagnosticCode::game_tile_field_invalid);
+    if (!texture) return std::unexpected(std::move(texture.error()));
+    auto asset_index = index_by_name(
+        assets, *texture, "texture asset", source, pointer + "/texture", DiagnosticCode::game_tile_field_invalid);
+    if (!asset_index) return std::unexpected(std::move(asset_index.error()));
+    if (asset_plans[*asset_index].kind != GameAssetKind::png &&
+        asset_plans[*asset_index].kind != GameAssetKind::font) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_tile_field_invalid, "Tile texture must reference a PNG or font asset", source,
+            pointer + "/texture"));
+    }
+    auto atlas_columns = u32_value(
+        object, "atlas_columns", 1U, 256U, source, pointer, DiagnosticCode::game_tile_field_invalid);
+    if (!atlas_columns) return std::unexpected(std::move(atlas_columns.error()));
+    auto atlas_rows = u32_value(
+        object, "atlas_rows", 1U, 256U, source, pointer, DiagnosticCode::game_tile_field_invalid);
+    if (!atlas_rows) return std::unexpected(std::move(atlas_rows.error()));
+    const auto atlas_count = *atlas_columns * *atlas_rows;
+    if (atlas_count > std::numeric_limits<std::uint16_t>::max()) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_tile_field_invalid, "Tile atlas exceeds the 16-bit tile limit", source, pointer));
+    }
+    const auto cell_count = static_cast<std::size_t>(grid_plans[*grid_index].columns) * grid_plans[*grid_index].rows;
+    if (optional(object, "fill") != nullptr && optional(object, "cells") != nullptr) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_tile_field_invalid, "Tile layer cannot declare both fill and cells", source, pointer));
+    }
+    std::uint32_t fill = 0U;
+    if (optional(object, "fill") != nullptr) {
+        auto parsed = u32_value(
+            object, "fill", 0U, atlas_count, source, pointer, DiagnosticCode::game_tile_field_invalid);
+        if (!parsed) return std::unexpected(std::move(parsed.error()));
+        fill = *parsed;
+    }
+    GameTileLayerPlan plan{};
+    plan.symbol = symbols.intern(std::move(*id));
+    plan.grid_index = *grid_index;
+    plan.asset_index = *asset_index;
+    plan.atlas_columns = *atlas_columns;
+    plan.atlas_rows = *atlas_rows;
+    plan.initial_cells.assign(cell_count, static_cast<std::uint16_t>(fill));
+    if (const auto* cells = optional(object, "cells"); cells != nullptr) {
+        if (!cells->is_array() || cells->size() != cell_count) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_tile_field_invalid, "Tile cells must exactly match the logical grid", source,
+                pointer + "/cells"));
+        }
+        for (std::size_t cell = 0U; cell < cell_count; ++cell) {
+            auto value = integer_number(
+                (*cells)[cell], 0, static_cast<std::int32_t>(atlas_count), source,
+                pointer + "/cells/" + std::to_string(cell), DiagnosticCode::game_tile_field_invalid);
+            if (!value) return std::unexpected(std::move(value.error()));
+            plan.initial_cells[cell] = static_cast<std::uint16_t>(*value);
+        }
+    }
+    auto tint = optional_color(
+        object, "tint", {}, source, pointer, DiagnosticCode::game_tile_field_invalid);
+    if (!tint) return std::unexpected(std::move(tint.error()));
+    plan.tint = *tint;
+    if (optional(object, "layer") != nullptr) {
+        auto layer = i32_value(
+            object, "layer", -1'000'000, 1'000'000, source, pointer,
+            DiagnosticCode::game_tile_field_invalid);
+        if (!layer) return std::unexpected(std::move(layer.error()));
+        plan.layer = *layer;
+    }
+    auto visible = optional_bool(
+        object, "visible", true, source, pointer, DiagnosticCode::game_tile_field_invalid);
+    if (!visible) return std::unexpected(std::move(visible.error()));
+    plan.visible = *visible;
+    return plan;
+}
+
+Result<GameFieldPlan> parse_field(
+    const Json& object,
+    const std::size_t index,
+    const std::unordered_map<std::string, std::uint32_t>& grids,
+    const std::vector<GameGridPlan>& grid_plans,
+    Symbols& symbols,
+    const std::string_view source) {
+    const auto pointer = "/fields/" + std::to_string(index);
+    if (auto rejected = reject_unknown(
+            object, {"id", "grid", "min", "max", "initial", "cells"}, source, pointer,
+            DiagnosticCode::game_tile_field_invalid);
+        !rejected) {
+        return std::unexpected(std::move(rejected.error()));
+    }
+    auto id = string_value(object, "id", source, pointer, DiagnosticCode::game_tile_field_invalid);
+    if (!id) return std::unexpected(std::move(id.error()));
+    auto grid = string_value(object, "grid", source, pointer, DiagnosticCode::game_tile_field_invalid);
+    if (!grid) return std::unexpected(std::move(grid.error()));
+    auto grid_index = index_by_name(
+        grids, *grid, "logical grid", source, pointer + "/grid", DiagnosticCode::game_tile_field_invalid);
+    if (!grid_index) return std::unexpected(std::move(grid_index.error()));
+    auto minimum = i32_value(
+        object, "min", std::numeric_limits<std::int32_t>::min(), std::numeric_limits<std::int32_t>::max(), source,
+        pointer, DiagnosticCode::game_tile_field_invalid);
+    if (!minimum) return std::unexpected(std::move(minimum.error()));
+    auto maximum = i32_value(
+        object, "max", *minimum, std::numeric_limits<std::int32_t>::max(), source, pointer,
+        DiagnosticCode::game_tile_field_invalid);
+    if (!maximum) return std::unexpected(std::move(maximum.error()));
+    if (optional(object, "initial") != nullptr && optional(object, "cells") != nullptr) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_tile_field_invalid, "Field cannot declare both initial and cells", source, pointer));
+    }
+    std::int32_t initial = *minimum <= 0 && *maximum >= 0 ? 0 : *minimum;
+    if (optional(object, "initial") != nullptr) {
+        auto parsed = i32_value(
+            object, "initial", *minimum, *maximum, source, pointer, DiagnosticCode::game_tile_field_invalid);
+        if (!parsed) return std::unexpected(std::move(parsed.error()));
+        initial = *parsed;
+    }
+    const auto cell_count = static_cast<std::size_t>(grid_plans[*grid_index].columns) * grid_plans[*grid_index].rows;
+    GameFieldPlan plan{};
+    plan.symbol = symbols.intern(std::move(*id));
+    plan.grid_index = *grid_index;
+    plan.minimum = *minimum;
+    plan.maximum = *maximum;
+    plan.initial_cells.assign(cell_count, initial);
+    if (const auto* cells = optional(object, "cells"); cells != nullptr) {
+        if (!cells->is_array() || cells->size() != cell_count) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_tile_field_invalid, "Field cells must exactly match the logical grid", source,
+                pointer + "/cells"));
+        }
+        for (std::size_t cell = 0U; cell < cell_count; ++cell) {
+            auto value = integer_number(
+                (*cells)[cell], *minimum, *maximum, source, pointer + "/cells/" + std::to_string(cell),
+                DiagnosticCode::game_tile_field_invalid);
+            if (!value) return std::unexpected(std::move(value.error()));
+            plan.initial_cells[cell] = *value;
+        }
+    }
+    return plan;
+}
+
+Result<GameParticleEmitterPlan> parse_particle_emitter(
+    const Json& object,
+    const std::size_t index,
+    const std::unordered_map<std::string, std::uint32_t>& assets,
+    const std::vector<GameAssetPlan>& asset_plans,
+    Symbols& symbols,
+    const std::string_view source) {
+    const auto pointer = "/particle_emitters/" + std::to_string(index);
+    if (auto rejected = reject_unknown(
+            object, {"id", "capacity", "on_exhausted", "sprite", "lifetime_ticks", "velocity_min", "velocity_max"},
+            source, pointer, DiagnosticCode::game_presentation_invalid);
+        !rejected) {
+        return std::unexpected(std::move(rejected.error()));
+    }
+    auto id = string_value(object, "id", source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!id) return std::unexpected(std::move(id.error()));
+    auto capacity = u32_value(
+        object, "capacity", 1U, 10'000U, source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!capacity) return std::unexpected(std::move(capacity.error()));
+    auto exhausted = string_value(
+        object, "on_exhausted", source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!exhausted) return std::unexpected(std::move(exhausted.error()));
+    GamePoolExhaustionPolicy policy{};
+    if (*exhausted == "skip") policy = GamePoolExhaustionPolicy::skip;
+    else if (*exhausted == "recycle_oldest") policy = GamePoolExhaustionPolicy::recycle_oldest;
+    else {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_presentation_invalid, "Particle exhaustion must be skip or recycle_oldest", source,
+            pointer + "/on_exhausted"));
+    }
+    auto sprite_member = required(
+        object, "sprite", source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!sprite_member) return std::unexpected(std::move(sprite_member.error()));
+    auto sprite = parse_presentation_sprite(**sprite_member, pointer + "/sprite", assets, asset_plans, source);
+    if (!sprite) return std::unexpected(std::move(sprite.error()));
+    auto lifetime = required(
+        object, "lifetime_ticks", source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!lifetime) return std::unexpected(std::move(lifetime.error()));
+    if (!(*lifetime)->is_array() || (*lifetime)->size() != 2U) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_presentation_invalid, "Particle lifetime_ticks must be a two-integer array", source,
+            pointer + "/lifetime_ticks"));
+    }
+    auto lifetime_min = integer_number(
+        (**lifetime)[0], 1, 1'000'000, source, pointer + "/lifetime_ticks/0",
+        DiagnosticCode::game_presentation_invalid);
+    if (!lifetime_min) return std::unexpected(std::move(lifetime_min.error()));
+    auto lifetime_max = integer_number(
+        (**lifetime)[1], *lifetime_min, 1'000'000, source, pointer + "/lifetime_ticks/1",
+        DiagnosticCode::game_presentation_invalid);
+    if (!lifetime_max) return std::unexpected(std::move(lifetime_max.error()));
+    auto velocity_min = optional_vec2(
+        object, "velocity_min", {}, source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!velocity_min) return std::unexpected(std::move(velocity_min.error()));
+    auto velocity_max = optional_vec2(
+        object, "velocity_max", *velocity_min, source, pointer, DiagnosticCode::game_presentation_invalid);
+    if (!velocity_max) return std::unexpected(std::move(velocity_max.error()));
+    if (velocity_min->x > velocity_max->x || velocity_min->y > velocity_max->y) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_presentation_invalid, "Particle velocity_min must not exceed velocity_max", source,
+            pointer));
+    }
+    return GameParticleEmitterPlan{
+        symbols.intern(std::move(*id)), *capacity, policy, *sprite,
+        static_cast<std::uint32_t>(*lifetime_min), static_cast<std::uint32_t>(*lifetime_max),
+        *velocity_min, *velocity_max};
+}
+
 Result<GameRuleTargetPlan> parse_rule_target(
     const Json& object,
     const std::string_view pointer,
     const std::unordered_map<std::string, std::uint32_t>& spawn_groups,
     const std::vector<GameSpawnGroupPlan>& spawn_plans,
     const bool collision_context,
+    const bool event_entity_context,
     const std::string_view source,
     const DiagnosticCode diagnostic_code) {
     if (auto rejected = reject_unknown(
@@ -1517,12 +2266,79 @@ Result<GameRuleTargetPlan> parse_rule_target(
                 diagnostic_code, "Collision target does not accept group or index", source, pointer));
         }
         target.kind = *kind == "collision_a" ? GameRuleTargetKind::collision_a : GameRuleTargetKind::collision_b;
+    } else if (*kind == "event_entity") {
+        if (!event_entity_context) {
+            return std::unexpected(game_error(
+                diagnostic_code, "event_entity target requires an animation_finished event", source, pointer));
+        }
+        if (optional(object, "group") != nullptr || optional(object, "index") != nullptr) {
+            return std::unexpected(game_error(
+                diagnostic_code, "event_entity target does not accept group or index", source, pointer));
+        }
+        target.kind = GameRuleTargetKind::event_entity;
     } else {
         return std::unexpected(game_error(
             diagnostic_code, "Unsupported rule target kind", source,
             std::string{pointer} + "/kind"));
     }
     return target;
+}
+
+struct ParsedCellSource final {
+    GameCellSourceKind kind{GameCellSourceKind::constant};
+    std::uint32_t x{0U};
+    std::uint32_t y{0U};
+    GameRuleTargetPlan target{};
+};
+
+Result<ParsedCellSource> parse_cell_source(
+    const Json& object,
+    const std::string_view pointer,
+    const GameGridPlan& grid,
+    const std::unordered_map<std::string, std::uint32_t>& spawn_groups,
+    const std::vector<GameSpawnGroupPlan>& spawn_plans,
+    const bool collision_context,
+    const bool event_entity_context,
+    const std::string_view source,
+    const DiagnosticCode diagnostic_code) {
+    const auto* target_member = optional(object, "target");
+    const auto* x_member = optional(object, "x");
+    const auto* y_member = optional(object, "y");
+    if (target_member != nullptr) {
+        if (x_member != nullptr || y_member != nullptr) {
+            return std::unexpected(game_error(
+                diagnostic_code, "Cell source cannot combine target with x or y", source,
+                std::string{pointer}));
+        }
+        auto target = parse_rule_target(
+            *target_member, std::string{pointer} + "/target", spawn_groups, spawn_plans,
+            collision_context, event_entity_context, source, diagnostic_code);
+        if (!target) return std::unexpected(std::move(target.error()));
+        if (target->kind == GameRuleTargetKind::spawn_group) {
+            return std::unexpected(game_error(
+                diagnostic_code, "Cell target must identify one entity", source,
+                std::string{pointer} + "/target"));
+        }
+        ParsedCellSource parsed{};
+        parsed.kind = GameCellSourceKind::target;
+        parsed.target = *target;
+        return parsed;
+    }
+    if (x_member == nullptr || y_member == nullptr) {
+        return std::unexpected(game_error(
+            diagnostic_code, "Cell source requires either target or both x and y", source,
+            std::string{pointer}));
+    }
+    auto x = u32_value(
+        object, "x", 0U, grid.columns - 1U, source, pointer, diagnostic_code);
+    if (!x) return std::unexpected(std::move(x.error()));
+    auto y = u32_value(
+        object, "y", 0U, grid.rows - 1U, source, pointer, diagnostic_code);
+    if (!y) return std::unexpected(std::move(y.error()));
+    ParsedCellSource parsed{};
+    parsed.x = *x;
+    parsed.y = *y;
+    return parsed;
 }
 
 Result<GameRuleEventPlan> parse_rule_event(
@@ -1532,9 +2348,15 @@ Result<GameRuleEventPlan> parse_rule_event(
     const std::unordered_map<std::string, std::uint32_t>& collision_rules,
     const std::vector<GameCollisionRulePlan>& collision_rule_plans,
     const bool version_0_5,
+    const bool version_0_6,
+    const std::unordered_map<std::string, std::uint32_t>& animations,
     const std::string_view source) {
     if (auto rejected = reject_unknown(
-            object, {"kind", "action", "interval_ticks", "rule"}, source, pointer,
+            object,
+            version_0_6
+                ? std::initializer_list<std::string_view>{"kind", "action", "interval_ticks", "rule", "animation"}
+                : std::initializer_list<std::string_view>{"kind", "action", "interval_ticks", "rule"},
+            source, pointer,
             DiagnosticCode::game_scene_invalid);
         !rejected) {
         return std::unexpected(std::move(rejected.error()));
@@ -1587,6 +2409,16 @@ Result<GameRuleEventPlan> parse_rule_event(
                 "Rule event kind does not match the collision interaction", source,
                 std::string{pointer} + "/rule"));
         }
+    } else if (*kind == "animation_finished" && version_0_6) {
+        event.kind = GameRuleEventKind::animation_finished;
+        auto animation = string_value(
+            object, "animation", source, pointer, DiagnosticCode::game_animation_invalid);
+        if (!animation) return std::unexpected(std::move(animation.error()));
+        auto animation_index = index_by_name(
+            animations, *animation, "animation", source, std::string{pointer} + "/animation",
+            DiagnosticCode::game_animation_invalid);
+        if (!animation_index) return std::unexpected(std::move(animation_index.error()));
+        event.animation_index = *animation_index;
     } else {
         return std::unexpected(game_error(
             DiagnosticCode::game_scene_invalid, "Unsupported rule event kind", source,
@@ -1599,7 +2431,8 @@ Result<GameRuleEventPlan> parse_rule_event(
              {"interval_ticks", event.kind == GameRuleEventKind::fixed_interval},
              {"rule", event.kind == GameRuleEventKind::collision ||
                           event.kind == GameRuleEventKind::contact_begin ||
-                          event.kind == GameRuleEventKind::contact_end},
+                           event.kind == GameRuleEventKind::contact_end},
+             {"animation", event.kind == GameRuleEventKind::animation_finished},
          }) {
         if (!allowed && optional(object, field) != nullptr) {
             return std::unexpected(game_error(
@@ -1613,12 +2446,24 @@ Result<GameRuleEventPlan> parse_rule_event(
 Result<GameRuleConditionPlan> parse_rule_condition(
     const Json& object,
     const std::string_view pointer,
+    const GameRuleEventPlan& event,
     const std::unordered_map<std::string, std::uint32_t>& states,
     const std::unordered_map<std::string, std::uint32_t>& spawn_groups,
     const std::vector<GameSpawnGroupPlan>& spawn_plans,
+    const std::unordered_map<std::string, std::uint32_t>& tile_layers,
+    const std::vector<GameTileLayerPlan>& tile_layer_plans,
+    const std::unordered_map<std::string, std::uint32_t>& fields,
+    const std::vector<GameFieldPlan>& field_plans,
+    const std::vector<GameGridPlan>& grid_plans,
+    const bool version_0_6,
     const std::string_view source) {
     if (auto rejected = reject_unknown(
-            object, {"kind", "state", "group", "op", "value"}, source, pointer,
+            object,
+            version_0_6
+                ? std::initializer_list<std::string_view>{
+                      "kind", "state", "group", "op", "value", "layer", "field", "x", "y", "target"}
+                : std::initializer_list<std::string_view>{"kind", "state", "group", "op", "value"},
+            source, pointer,
             DiagnosticCode::game_scene_invalid);
         !rejected) {
         return std::unexpected(std::move(rejected.error()));
@@ -1631,6 +2476,10 @@ Result<GameRuleConditionPlan> parse_rule_condition(
     if (!comparison) return std::unexpected(std::move(comparison.error()));
     GameRuleConditionPlan condition{};
     condition.comparison = *comparison;
+    const bool collision_context = event.kind == GameRuleEventKind::collision ||
+                                   event.kind == GameRuleEventKind::contact_begin ||
+                                   event.kind == GameRuleEventKind::contact_end;
+    const bool event_entity_context = event.kind == GameRuleEventKind::animation_finished;
     if (*kind == "int_state") {
         condition.kind = GameRuleConditionKind::int_state;
         auto state = string_value(object, "state", source, pointer, DiagnosticCode::game_scene_invalid);
@@ -1669,10 +2518,81 @@ Result<GameRuleConditionPlan> parse_rule_condition(
                 DiagnosticCode::game_scene_invalid, "group_active_count condition does not accept state", source,
                 std::string{pointer} + "/state"));
         }
+    } else if (version_0_6 && (*kind == "tile_value" || *kind == "field_value")) {
+        const bool tile_condition = *kind == "tile_value";
+        condition.kind = tile_condition ? GameRuleConditionKind::tile_value
+                                        : GameRuleConditionKind::field_value;
+        std::uint32_t grid_index = 0U;
+        if (tile_condition) {
+            auto layer = string_value(
+                object, "layer", source, pointer, DiagnosticCode::game_tile_field_invalid);
+            if (!layer) return std::unexpected(std::move(layer.error()));
+            auto layer_index = index_by_name(
+                tile_layers, *layer, "tile layer", source, std::string{pointer} + "/layer",
+                DiagnosticCode::game_tile_field_invalid);
+            if (!layer_index) return std::unexpected(std::move(layer_index.error()));
+            condition.tile_layer_index = *layer_index;
+            grid_index = tile_layer_plans[*layer_index].grid_index;
+            const auto maximum = static_cast<std::int32_t>(
+                tile_layer_plans[*layer_index].atlas_columns * tile_layer_plans[*layer_index].atlas_rows);
+            auto value = i32_value(
+                object, "value", 0, maximum, source, pointer, DiagnosticCode::game_tile_field_invalid);
+            if (!value) return std::unexpected(std::move(value.error()));
+            condition.value = *value;
+            if (optional(object, "field") != nullptr) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_tile_field_invalid,
+                    "tile_value does not accept field", source, std::string{pointer} + "/field"));
+            }
+        } else {
+            auto field = string_value(
+                object, "field", source, pointer, DiagnosticCode::game_tile_field_invalid);
+            if (!field) return std::unexpected(std::move(field.error()));
+            auto field_index = index_by_name(
+                fields, *field, "integer field", source, std::string{pointer} + "/field",
+                DiagnosticCode::game_tile_field_invalid);
+            if (!field_index) return std::unexpected(std::move(field_index.error()));
+            condition.field_index = *field_index;
+            grid_index = field_plans[*field_index].grid_index;
+            auto value = i32_value(
+                object, "value", field_plans[*field_index].minimum, field_plans[*field_index].maximum,
+                source, pointer, DiagnosticCode::game_tile_field_invalid);
+            if (!value) return std::unexpected(std::move(value.error()));
+            condition.value = *value;
+            if (optional(object, "layer") != nullptr) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_tile_field_invalid,
+                    "field_value does not accept layer", source, std::string{pointer} + "/layer"));
+            }
+        }
+        if (optional(object, "state") != nullptr || optional(object, "group") != nullptr) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_tile_field_invalid,
+                "Tile and field conditions do not accept state or group", source, std::string{pointer}));
+        }
+        auto cell = parse_cell_source(
+            object, pointer, grid_plans[grid_index], spawn_groups, spawn_plans,
+            collision_context, event_entity_context, source, DiagnosticCode::game_tile_field_invalid);
+        if (!cell) return std::unexpected(std::move(cell.error()));
+        condition.cell_source = cell->kind;
+        condition.cell_x = cell->x;
+        condition.cell_y = cell->y;
+        condition.cell_target = cell->target;
     } else {
         return std::unexpected(game_error(
             DiagnosticCode::game_scene_invalid, "Unsupported rule condition kind", source,
             std::string{pointer} + "/kind"));
+    }
+    if (condition.kind == GameRuleConditionKind::int_state ||
+        condition.kind == GameRuleConditionKind::group_active_count) {
+        for (const auto field : {"layer", "field", "x", "y", "target"}) {
+            if (optional(object, field) != nullptr) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_scene_invalid,
+                    "Field is not valid for this rule condition", source,
+                    std::string{pointer} + "/" + field));
+            }
+        }
     }
     return condition;
 }
@@ -1693,12 +2613,27 @@ Result<GameRuleActionPlan> parse_rule_action(
     const std::vector<GameCollisionRulePlan>& collision_rule_plans,
     const std::unordered_map<std::string, std::uint32_t>& assets,
     const std::vector<GameAssetPlan>& asset_plans,
+    const std::unordered_map<std::string, std::uint32_t>& animations,
+    const std::vector<GameAnimationPlan>& animation_plans,
+    const std::unordered_map<std::string, std::uint32_t>& tile_layers,
+    const std::vector<GameTileLayerPlan>& tile_layer_plans,
+    const std::unordered_map<std::string, std::uint32_t>& fields,
+    const std::vector<GameFieldPlan>& field_plans,
+    const std::unordered_map<std::string, std::uint32_t>& locales,
+    const std::unordered_map<std::string, std::uint32_t>& input_profiles,
+    const std::unordered_map<std::string, std::uint32_t>& particle_emitters,
+    const std::vector<GameParticleEmitterPlan>& particle_emitter_plans,
+    const std::vector<GameGridPlan>& grid_plans,
+    const GameSavePlan& save_plan,
+    const bool version_0_6,
     const std::string_view source) {
     if (auto rejected = reject_unknown(
             object,
             {"kind", "state", "value", "target", "group", "count", "velocity", "system", "direction",
              "asset", "grid", "occupied_groups", "result_state", "pool", "position", "rotation",
-             "lifetime_ticks"},
+             "lifetime_ticks", "animation", "restart", "layer", "field", "x", "y", "slot",
+             "amplitude", "duration_ticks", "zoom", "locale", "profile", "loop", "fade_ticks",
+             "volume", "emitter", "particles"},
             source, pointer, DiagnosticCode::game_scene_invalid);
         !rejected) {
         return std::unexpected(std::move(rejected.error()));
@@ -1709,6 +2644,7 @@ Result<GameRuleActionPlan> parse_rule_action(
     const bool collision_context = event.kind == GameRuleEventKind::collision ||
                                    event.kind == GameRuleEventKind::contact_begin ||
                                    event.kind == GameRuleEventKind::contact_end;
+    const bool event_entity_context = event.kind == GameRuleEventKind::animation_finished;
     const auto reject_action_parameters = [&](
         const std::initializer_list<std::string_view> allowed,
         const DiagnosticCode diagnostic_code = DiagnosticCode::game_scene_invalid) -> Result<void> {
@@ -1718,7 +2654,9 @@ Result<GameRuleActionPlan> parse_rule_action(
         for (const auto field : {
                  "state", "value", "target", "group", "count", "velocity", "system", "direction", "asset",
                  "grid", "occupied_groups", "result_state", "pool", "position", "rotation",
-                 "lifetime_ticks"}) {
+                 "lifetime_ticks", "animation", "restart", "layer", "field", "x", "y", "slot",
+                 "amplitude", "duration_ticks", "zoom", "locale", "profile", "loop", "fade_ticks",
+                 "volume", "emitter", "particles"}) {
             if (!is_allowed(field) && optional(object, field) != nullptr) {
                 return std::unexpected(game_error(
                     diagnostic_code, "Field is not valid for this rule action", source,
@@ -1738,7 +2676,8 @@ Result<GameRuleActionPlan> parse_rule_action(
         auto member = required(object, "target", source, pointer, DiagnosticCode::game_scene_invalid);
         if (!member) return std::unexpected(std::move(member.error()));
         return parse_rule_target(
-            **member, std::string{pointer} + "/target", spawn_groups, spawn_plans, collision_context, source,
+            **member, std::string{pointer} + "/target", spawn_groups, spawn_plans, collision_context,
+            event_entity_context, source,
             DiagnosticCode::game_scene_invalid);
     };
     const auto parse_pool_reference = [&]() -> Result<std::uint32_t> {
@@ -1747,17 +2686,18 @@ Result<GameRuleActionPlan> parse_rule_action(
         return index_by_name(
             pools, *pool, "pool", source, std::string{pointer} + "/pool", DiagnosticCode::game_pool_invalid);
     };
-    const auto parse_optional_result_state = [&]() -> Result<void> {
+    const auto parse_optional_result_state = [&]
+        (const DiagnosticCode diagnostic_code = DiagnosticCode::game_pool_invalid) -> Result<void> {
         if (optional(object, "result_state") == nullptr) return {};
-        auto state = string_value(object, "result_state", source, pointer, DiagnosticCode::game_pool_invalid);
+        auto state = string_value(object, "result_state", source, pointer, diagnostic_code);
         if (!state) return std::unexpected(std::move(state.error()));
         auto state_index = index_by_name(
             states, *state, "integer state", source, std::string{pointer} + "/result_state",
-            DiagnosticCode::game_pool_invalid);
+            diagnostic_code);
         if (!state_index) return std::unexpected(std::move(state_index.error()));
         if (state_plans[*state_index].minimum > 0 || state_plans[*state_index].maximum < 1) {
             return std::unexpected(game_error(
-                DiagnosticCode::game_pool_invalid, "result_state range must contain zero and one", source,
+                diagnostic_code, "result_state range must contain zero and one", source,
                 std::string{pointer} + "/result_state"));
         }
         action.has_result_state = true;
@@ -2052,7 +2992,7 @@ Result<GameRuleActionPlan> parse_rule_action(
             if (!target_member) return std::unexpected(std::move(target_member.error()));
             auto target = parse_rule_target(
                 **target_member, position_pointer + "/target", spawn_groups, spawn_plans,
-                collision_context, source, DiagnosticCode::game_pool_invalid);
+                collision_context, false, source, DiagnosticCode::game_pool_invalid);
             if (!target) return std::unexpected(std::move(target.error()));
             if (target->kind == GameRuleTargetKind::spawn_group) {
                 return std::unexpected(game_error(
@@ -2118,7 +3058,7 @@ Result<GameRuleActionPlan> parse_rule_action(
         if (!target_member) return std::unexpected(std::move(target_member.error()));
         auto target = parse_rule_target(
             **target_member, std::string{pointer} + "/target", spawn_groups, spawn_plans,
-            collision_context, source, DiagnosticCode::game_pool_invalid);
+            collision_context, false, source, DiagnosticCode::game_pool_invalid);
         if (!target) return std::unexpected(std::move(target.error()));
         if (target->kind == GameRuleTargetKind::spawn_group) {
             return std::unexpected(game_error(
@@ -2144,6 +3084,383 @@ Result<GameRuleActionPlan> parse_rule_action(
         auto pool_index = parse_pool_reference();
         if (!pool_index) return std::unexpected(std::move(pool_index.error()));
         action.pool_index = *pool_index;
+    } else if (version_0_6 && (*kind == "play_animation" || *kind == "stop_animation")) {
+        const bool play = *kind == "play_animation";
+        if (auto checked = reject_action_parameters(
+                play ? std::initializer_list<std::string_view>{"target", "animation", "restart"}
+                     : std::initializer_list<std::string_view>{"target"},
+                DiagnosticCode::game_animation_invalid);
+            !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        action.kind = play ? GameRuleActionKind::play_animation : GameRuleActionKind::stop_animation;
+        auto target = parse_target();
+        if (!target) return std::unexpected(std::move(target.error()));
+        action.target = *target;
+        const auto target_group_has_sprite = [&](const std::uint32_t group_index) {
+            return group_index < spawn_plans.size() && spawn_plans[group_index].has_sprite;
+        };
+        if ((target->kind == GameRuleTargetKind::spawn_group ||
+             target->kind == GameRuleTargetKind::spawn_index) &&
+            !target_group_has_sprite(target->spawn_group_index)) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_animation_invalid,
+                "Animation target requires a sprite component", source,
+                std::string{pointer} + "/target"));
+        }
+        if (target->kind == GameRuleTargetKind::collision_a ||
+            target->kind == GameRuleTargetKind::collision_b) {
+            const auto collision_group = target->kind == GameRuleTargetKind::collision_a
+                                             ? collision_rule_plans[event.collision_rule_index].group_a
+                                             : collision_rule_plans[event.collision_rule_index].group_b;
+            const bool all_have_sprite = std::ranges::all_of(
+                spawn_plans, [collision_group](const GameSpawnGroupPlan& spawn) {
+                    return !spawn.has_collider || spawn.collider.group != collision_group || spawn.has_sprite;
+                });
+            if (!all_have_sprite) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_animation_invalid,
+                    "Animation collision target requires a sprite on every endpoint group", source,
+                    std::string{pointer} + "/target"));
+            }
+        }
+        if (play) {
+            auto animation = string_value(
+                object, "animation", source, pointer, DiagnosticCode::game_animation_invalid);
+            if (!animation) return std::unexpected(std::move(animation.error()));
+            auto animation_index = index_by_name(
+                animations, *animation, "animation", source, std::string{pointer} + "/animation",
+                DiagnosticCode::game_animation_invalid);
+            if (!animation_index) return std::unexpected(std::move(animation_index.error()));
+            if (*animation_index >= animation_plans.size()) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_animation_invalid, "Animation index is invalid", source,
+                    std::string{pointer} + "/animation"));
+            }
+            action.animation_index = *animation_index;
+            auto restart = optional_bool(
+                object, "restart", true, source, pointer, DiagnosticCode::game_animation_invalid);
+            if (!restart) return std::unexpected(std::move(restart.error()));
+            action.restart_animation = *restart;
+        }
+    } else if (version_0_6 && (*kind == "set_tile" || *kind == "set_field" || *kind == "add_field")) {
+        if (auto checked = reject_action_parameters(
+                *kind == "set_tile"
+                    ? std::initializer_list<std::string_view>{"layer", "x", "y", "target", "value", "result_state"}
+                    : std::initializer_list<std::string_view>{"field", "x", "y", "target", "value", "result_state"},
+                DiagnosticCode::game_tile_field_invalid);
+            !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        const bool tile_action = *kind == "set_tile";
+        std::uint32_t grid_index = 0U;
+        if (tile_action) {
+            action.kind = GameRuleActionKind::set_tile;
+            auto layer = string_value(
+                object, "layer", source, pointer, DiagnosticCode::game_tile_field_invalid);
+            if (!layer) return std::unexpected(std::move(layer.error()));
+            auto layer_index = index_by_name(
+                tile_layers, *layer, "tile layer", source, std::string{pointer} + "/layer",
+                DiagnosticCode::game_tile_field_invalid);
+            if (!layer_index) return std::unexpected(std::move(layer_index.error()));
+            action.tile_layer_index = *layer_index;
+            grid_index = tile_layer_plans[*layer_index].grid_index;
+            const auto maximum = tile_layer_plans[*layer_index].atlas_columns *
+                                 tile_layer_plans[*layer_index].atlas_rows;
+            auto value = u32_value(
+                object, "value", 0U, maximum, source, pointer, DiagnosticCode::game_tile_field_invalid);
+            if (!value) return std::unexpected(std::move(value.error()));
+            action.tile_value = *value;
+        } else {
+            action.kind = *kind == "set_field" ? GameRuleActionKind::set_field
+                                                : GameRuleActionKind::add_field;
+            auto field = string_value(
+                object, "field", source, pointer, DiagnosticCode::game_tile_field_invalid);
+            if (!field) return std::unexpected(std::move(field.error()));
+            auto field_index = index_by_name(
+                fields, *field, "integer field", source, std::string{pointer} + "/field",
+                DiagnosticCode::game_tile_field_invalid);
+            if (!field_index) return std::unexpected(std::move(field_index.error()));
+            action.field_index = *field_index;
+            grid_index = field_plans[*field_index].grid_index;
+            const auto minimum = action.kind == GameRuleActionKind::set_field
+                                     ? field_plans[*field_index].minimum
+                                     : std::numeric_limits<std::int32_t>::min();
+            const auto maximum = action.kind == GameRuleActionKind::set_field
+                                     ? field_plans[*field_index].maximum
+                                     : std::numeric_limits<std::int32_t>::max();
+            auto value = i32_value(
+                object, "value", minimum, maximum, source, pointer,
+                DiagnosticCode::game_tile_field_invalid);
+            if (!value) return std::unexpected(std::move(value.error()));
+            action.value = *value;
+        }
+        auto cell = parse_cell_source(
+            object, pointer, grid_plans[grid_index], spawn_groups, spawn_plans,
+            collision_context, event_entity_context, source, DiagnosticCode::game_tile_field_invalid);
+        if (!cell) return std::unexpected(std::move(cell.error()));
+        action.cell_source = cell->kind;
+        action.cell_x = cell->x;
+        action.cell_y = cell->y;
+        action.cell_target = cell->target;
+        if (auto result = parse_optional_result_state(DiagnosticCode::game_tile_field_invalid); !result) {
+            return std::unexpected(std::move(result.error()));
+        }
+    } else if (version_0_6 &&
+               (*kind == "save_slot" || *kind == "load_slot" || *kind == "delete_slot")) {
+        if (auto checked = reject_action_parameters(
+                {"slot", "result_state"}, DiagnosticCode::game_save_invalid);
+            !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        if (!save_plan.enabled) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_save_invalid,
+                "Save actions require a manifest save declaration", source, pointer));
+        }
+        action.kind = *kind == "save_slot" ? GameRuleActionKind::save_slot
+                    : *kind == "load_slot" ? GameRuleActionKind::load_slot
+                                             : GameRuleActionKind::delete_slot;
+        auto slot = u32_value(
+            object, "slot", 0U, save_plan.slot_count - 1U, source, pointer,
+            DiagnosticCode::game_save_invalid);
+        if (!slot) return std::unexpected(std::move(slot.error()));
+        action.save_slot = *slot;
+        if (auto result = parse_optional_result_state(DiagnosticCode::game_save_invalid); !result) {
+            return std::unexpected(std::move(result.error()));
+        }
+    } else if (version_0_6 && *kind == "camera_shake") {
+        if (auto checked = reject_action_parameters(
+                {"amplitude", "duration_ticks"}, DiagnosticCode::game_presentation_invalid);
+            !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        action.kind = GameRuleActionKind::camera_shake;
+        auto amplitude_member = required(
+            object, "amplitude", source, pointer, DiagnosticCode::game_presentation_invalid);
+        if (!amplitude_member) return std::unexpected(std::move(amplitude_member.error()));
+        auto amplitude = number(
+            **amplitude_member, source, std::string{pointer} + "/amplitude",
+            DiagnosticCode::game_presentation_invalid);
+        if (!amplitude) return std::unexpected(std::move(amplitude.error()));
+        if (*amplitude < 0.0F || *amplitude > 1'000.0F) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_presentation_invalid,
+                "Camera shake amplitude must be between zero and 1000", source,
+                std::string{pointer} + "/amplitude"));
+        }
+        action.scalar = *amplitude;
+        auto duration = u32_value(
+            object, "duration_ticks", 1U, 1'000'000U, source, pointer,
+            DiagnosticCode::game_presentation_invalid);
+        if (!duration) return std::unexpected(std::move(duration.error()));
+        action.duration_ticks = *duration;
+    } else if (version_0_6 && *kind == "set_camera_zoom") {
+        if (auto checked = reject_action_parameters(
+                {"zoom"}, DiagnosticCode::game_presentation_invalid);
+            !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        action.kind = GameRuleActionKind::set_camera_zoom;
+        auto zoom_member = required(
+            object, "zoom", source, pointer, DiagnosticCode::game_presentation_invalid);
+        if (!zoom_member) return std::unexpected(std::move(zoom_member.error()));
+        auto zoom = number(
+            **zoom_member, source, std::string{pointer} + "/zoom",
+            DiagnosticCode::game_presentation_invalid);
+        if (!zoom) return std::unexpected(std::move(zoom.error()));
+        if (*zoom < 0.1F || *zoom > 10.0F) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_presentation_invalid,
+                "Camera zoom must be between 0.1 and 10", source,
+                std::string{pointer} + "/zoom"));
+        }
+        action.scalar = *zoom;
+    } else if (version_0_6 && (*kind == "set_locale" || *kind == "set_input_profile")) {
+        const bool locale_action = *kind == "set_locale";
+        if (auto checked = reject_action_parameters(
+                locale_action ? std::initializer_list<std::string_view>{"locale"}
+                              : std::initializer_list<std::string_view>{"profile"},
+                locale_action ? DiagnosticCode::game_localization_invalid
+                              : DiagnosticCode::game_input_profile_invalid);
+            !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        action.kind = locale_action ? GameRuleActionKind::set_locale
+                                    : GameRuleActionKind::set_input_profile;
+        const auto field = locale_action ? "locale" : "profile";
+        auto name = string_value(
+            object, field, source, pointer,
+            locale_action ? DiagnosticCode::game_localization_invalid
+                          : DiagnosticCode::game_input_profile_invalid);
+        if (!name) return std::unexpected(std::move(name.error()));
+        auto index = index_by_name(
+            locale_action ? locales : input_profiles, *name,
+            locale_action ? "locale" : "input profile", source,
+            std::string{pointer} + "/" + field,
+            locale_action ? DiagnosticCode::game_localization_invalid
+                          : DiagnosticCode::game_input_profile_invalid);
+        if (!index) return std::unexpected(std::move(index.error()));
+        if (locale_action) action.locale_index = *index;
+        else action.input_profile_index = *index;
+    } else if (version_0_6 &&
+               (*kind == "play_music" || *kind == "stop_music" || *kind == "set_music_volume")) {
+        if (*kind == "play_music") {
+            if (auto checked = reject_action_parameters(
+                    {"asset", "loop", "fade_ticks", "volume"}, DiagnosticCode::game_presentation_invalid);
+                !checked) {
+                return std::unexpected(std::move(checked.error()));
+            }
+            action.kind = GameRuleActionKind::play_music;
+            auto asset = string_value(
+                object, "asset", source, pointer, DiagnosticCode::game_presentation_invalid);
+            if (!asset) return std::unexpected(std::move(asset.error()));
+            auto asset_index = index_by_name(
+                assets, *asset, "music asset", source, std::string{pointer} + "/asset",
+                DiagnosticCode::game_presentation_invalid);
+            if (!asset_index) return std::unexpected(std::move(asset_index.error()));
+            if (asset_plans[*asset_index].kind != GameAssetKind::music) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_presentation_invalid,
+                    "play_music must reference a music asset", source,
+                    std::string{pointer} + "/asset"));
+            }
+            action.asset_index = *asset_index;
+            auto loop = optional_bool(
+                object, "loop", false, source, pointer, DiagnosticCode::game_presentation_invalid);
+            if (!loop) return std::unexpected(std::move(loop.error()));
+            action.loop = *loop;
+        } else if (*kind == "stop_music") {
+            if (auto checked = reject_action_parameters(
+                    {"fade_ticks"}, DiagnosticCode::game_presentation_invalid);
+                !checked) {
+                return std::unexpected(std::move(checked.error()));
+            }
+            action.kind = GameRuleActionKind::stop_music;
+        } else {
+            if (auto checked = reject_action_parameters(
+                    {"volume", "fade_ticks"}, DiagnosticCode::game_presentation_invalid);
+                !checked) {
+                return std::unexpected(std::move(checked.error()));
+            }
+            action.kind = GameRuleActionKind::set_music_volume;
+        }
+        if (optional(object, "fade_ticks") != nullptr) {
+            auto fade = u32_value(
+                object, "fade_ticks", 0U, 1'000'000U, source, pointer,
+                DiagnosticCode::game_presentation_invalid);
+            if (!fade) return std::unexpected(std::move(fade.error()));
+            action.fade_ticks = *fade;
+        }
+        if (optional(object, "volume") != nullptr) {
+            auto volume_member = required(
+                object, "volume", source, pointer, DiagnosticCode::game_presentation_invalid);
+            if (!volume_member) return std::unexpected(std::move(volume_member.error()));
+            auto volume = number(
+                **volume_member, source, std::string{pointer} + "/volume",
+                DiagnosticCode::game_presentation_invalid);
+            if (!volume) return std::unexpected(std::move(volume.error()));
+            if (*volume < 0.0F || *volume > 1.0F) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_presentation_invalid,
+                    "Music volume must be between zero and one", source,
+                    std::string{pointer} + "/volume"));
+            }
+            action.scalar = *volume;
+        } else if (action.kind == GameRuleActionKind::play_music) {
+            action.scalar = 1.0F;
+        } else if (action.kind == GameRuleActionKind::set_music_volume) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_presentation_invalid,
+                "set_music_volume requires volume", source,
+                std::string{pointer} + "/volume"));
+        }
+    } else if (version_0_6 && *kind == "emit_particles") {
+        if (auto checked = reject_action_parameters(
+                {"emitter", "particles", "position"}, DiagnosticCode::game_presentation_invalid);
+            !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        action.kind = GameRuleActionKind::emit_particles;
+        auto emitter = string_value(
+            object, "emitter", source, pointer, DiagnosticCode::game_presentation_invalid);
+        if (!emitter) return std::unexpected(std::move(emitter.error()));
+        auto emitter_index = index_by_name(
+            particle_emitters, *emitter, "particle emitter", source,
+            std::string{pointer} + "/emitter", DiagnosticCode::game_presentation_invalid);
+        if (!emitter_index) return std::unexpected(std::move(emitter_index.error()));
+        action.particle_emitter_index = *emitter_index;
+        auto count = u32_value(
+            object, "particles", 1U, particle_emitter_plans[*emitter_index].capacity,
+            source, pointer, DiagnosticCode::game_presentation_invalid);
+        if (!count) return std::unexpected(std::move(count.error()));
+        action.particle_count = *count;
+        auto position_member = required(
+            object, "position", source, pointer, DiagnosticCode::game_presentation_invalid);
+        if (!position_member) return std::unexpected(std::move(position_member.error()));
+        const auto position_pointer = std::string{pointer} + "/position";
+        if (auto rejected = reject_unknown(
+                **position_member, {"kind", "value", "target", "offset"}, source, position_pointer,
+                DiagnosticCode::game_presentation_invalid);
+            !rejected) {
+            return std::unexpected(std::move(rejected.error()));
+        }
+        auto position_kind = string_value(
+            **position_member, "kind", source, position_pointer,
+            DiagnosticCode::game_presentation_invalid);
+        if (!position_kind) return std::unexpected(std::move(position_kind.error()));
+        auto offset = optional_vec2(
+            **position_member, "offset", {}, source, position_pointer,
+            DiagnosticCode::game_presentation_invalid);
+        if (!offset) return std::unexpected(std::move(offset.error()));
+        action.particle_position_offset = *offset;
+        if (*position_kind == "constant") {
+            action.particle_position_kind = GamePoolSpawnPositionKind::constant;
+            auto value = required(
+                **position_member, "value", source, position_pointer,
+                DiagnosticCode::game_presentation_invalid);
+            if (!value) return std::unexpected(std::move(value.error()));
+            auto parsed = vec2(
+                **value, source, position_pointer + "/value",
+                DiagnosticCode::game_presentation_invalid);
+            if (!parsed) return std::unexpected(std::move(parsed.error()));
+            action.particle_position = *parsed;
+            if (optional(**position_member, "target") != nullptr) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_presentation_invalid,
+                    "Constant particle position does not accept target", source,
+                    position_pointer + "/target"));
+            }
+        } else if (*position_kind == "target") {
+            action.particle_position_kind = GamePoolSpawnPositionKind::target;
+            auto target_member = required(
+                **position_member, "target", source, position_pointer,
+                DiagnosticCode::game_presentation_invalid);
+            if (!target_member) return std::unexpected(std::move(target_member.error()));
+            auto target = parse_rule_target(
+                **target_member, position_pointer + "/target", spawn_groups, spawn_plans,
+                collision_context, event_entity_context, source,
+                DiagnosticCode::game_presentation_invalid);
+            if (!target) return std::unexpected(std::move(target.error()));
+            if (target->kind == GameRuleTargetKind::spawn_group) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_presentation_invalid,
+                    "Particle position target must identify one entity", source,
+                    position_pointer + "/target"));
+            }
+            action.particle_position_target = *target;
+            if (optional(**position_member, "value") != nullptr) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_presentation_invalid,
+                    "Target particle position does not accept value", source,
+                    position_pointer + "/value"));
+            }
+        } else {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_presentation_invalid,
+                "Particle position kind must be constant or target", source,
+                position_pointer + "/kind"));
+        }
     } else {
         return std::unexpected(game_error(
             DiagnosticCode::game_scene_invalid, "Unsupported rule action kind", source,
@@ -2168,8 +3485,21 @@ Result<GameRulePlan> parse_game_rule(
     const std::unordered_map<std::string, std::uint32_t>& collision_rules,
     const std::vector<GameCollisionRulePlan>& collision_rule_plans,
     const bool version_0_5,
+    const bool version_0_6,
     const std::unordered_map<std::string, std::uint32_t>& assets,
     const std::vector<GameAssetPlan>& asset_plans,
+    const std::unordered_map<std::string, std::uint32_t>& animations,
+    const std::vector<GameAnimationPlan>& animation_plans,
+    const std::unordered_map<std::string, std::uint32_t>& tile_layers,
+    const std::vector<GameTileLayerPlan>& tile_layer_plans,
+    const std::unordered_map<std::string, std::uint32_t>& fields,
+    const std::vector<GameFieldPlan>& field_plans,
+    const std::unordered_map<std::string, std::uint32_t>& locales,
+    const std::unordered_map<std::string, std::uint32_t>& input_profiles,
+    const std::unordered_map<std::string, std::uint32_t>& particle_emitters,
+    const std::vector<GameParticleEmitterPlan>& particle_emitter_plans,
+    const std::vector<GameGridPlan>& grid_plans,
+    const GameSavePlan& save_plan,
     Symbols& symbols,
     const std::string_view source) {
     const auto pointer = "/rules/" + std::to_string(index);
@@ -2184,7 +3514,8 @@ Result<GameRulePlan> parse_game_rule(
     auto event_member = required(object, "event", source, pointer, DiagnosticCode::game_scene_invalid);
     if (!event_member) return std::unexpected(std::move(event_member.error()));
     auto event = parse_rule_event(
-        **event_member, pointer + "/event", actions, collision_rules, collision_rule_plans, version_0_5, source);
+        **event_member, pointer + "/event", actions, collision_rules, collision_rule_plans,
+        version_0_5, version_0_6, animations, source);
     if (!event) return std::unexpected(std::move(event.error()));
     auto action_members = required(object, "actions", source, pointer, DiagnosticCode::game_scene_invalid);
     if (!action_members) return std::unexpected(std::move(action_members.error()));
@@ -2207,7 +3538,8 @@ Result<GameRulePlan> parse_game_rule(
         for (std::size_t condition_index = 0U; condition_index < conditions->size(); ++condition_index) {
             auto condition = parse_rule_condition(
                 (*conditions)[condition_index], pointer + "/conditions/" + std::to_string(condition_index),
-                states, spawn_groups, spawn_plans, source);
+                plan.event, states, spawn_groups, spawn_plans, tile_layers, tile_layer_plans,
+                fields, field_plans, grid_plans, version_0_6, source);
             if (!condition) return std::unexpected(std::move(condition.error()));
             plan.conditions.push_back(*condition);
         }
@@ -2218,7 +3550,9 @@ Result<GameRulePlan> parse_game_rule(
             (**action_members)[action_index], pointer + "/actions/" + std::to_string(action_index), plan.event,
             states, state_plans, spawn_groups, spawn_plans, pools, pool_plans, grids, systems, system_plans,
             collision_rule_plans,
-            assets, asset_plans,
+            assets, asset_plans, animations, animation_plans, tile_layers, tile_layer_plans,
+            fields, field_plans, locales, input_profiles, particle_emitters, particle_emitter_plans,
+            grid_plans, save_plan, version_0_6,
             source);
         if (!action) return std::unexpected(std::move(action.error()));
         plan.actions.push_back(std::move(*action));
@@ -2232,12 +3566,21 @@ Result<UiElementPlan> parse_ui(
     const std::unordered_map<std::string, std::uint32_t>& actions,
     const std::unordered_map<std::string, std::uint32_t>& assets,
     const std::vector<GameAssetPlan>& asset_plans,
+    const bool version_0_6,
+    const std::unordered_map<std::string, std::uint32_t>& localization_keys,
+    const GameWindowPlan& window_plan,
     Symbols& symbols,
     const std::string_view source) {
     const auto pointer = "/ui/" + std::to_string(index);
     if (auto rejected = reject_unknown(
             object,
-            {"id", "kind", "position", "size", "text", "font", "action", "color", "hover_color", "text_color", "layer", "text_scale"},
+            version_0_6
+                ? std::initializer_list<std::string_view>{
+                      "id", "kind", "position", "size", "text", "text_key", "font", "action", "color",
+                      "hover_color", "text_color", "layer", "text_scale", "anchor"}
+                : std::initializer_list<std::string_view>{
+                      "id", "kind", "position", "size", "text", "font", "action", "color", "hover_color",
+                      "text_color", "layer", "text_scale"},
             source,
             pointer,
             DiagnosticCode::game_scene_invalid);
@@ -2264,6 +3607,23 @@ Result<UiElementPlan> parse_ui(
     plan.symbol = symbols.intern(std::move(*id));
     plan.position = *position;
     plan.size = *size;
+    if (version_0_6 && optional(object, "anchor") != nullptr) {
+        auto anchor = string_value(
+            object, "anchor", source, pointer, DiagnosticCode::game_presentation_invalid);
+        if (!anchor) return std::unexpected(std::move(anchor.error()));
+        auto parsed = parse_ui_anchor(*anchor, source, pointer + "/anchor");
+        if (!parsed) return std::unexpected(std::move(parsed.error()));
+        plan.anchor = *parsed;
+        const float width = static_cast<float>(window_plan.virtual_width);
+        const float height = static_cast<float>(window_plan.virtual_height);
+        const auto base = anchored_ui_center(*parsed, *size, width, height);
+        plan.position = {base.x + position->x, base.y + position->y};
+        if (!representable_float(plan.position.x) || !representable_float(plan.position.y)) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_presentation_invalid, "Anchored UI position exceeds finite float range", source,
+                pointer + "/position"));
+        }
+    }
     if (*kind == "panel") plan.kind = UiElementKind::panel;
     else if (*kind == "text") plan.kind = UiElementKind::text;
     else if (*kind == "button") plan.kind = UiElementKind::button;
@@ -2296,7 +3656,7 @@ Result<UiElementPlan> parse_ui(
     }
     plan.text_scale = *text_scale;
     if (plan.kind == UiElementKind::panel) {
-        for (const auto field : {"text", "font", "action", "text_color"}) {
+        for (const auto field : {"text", "text_key", "font", "action", "text_color"}) {
             if (optional(object, field) != nullptr) {
                 return std::unexpected(game_error(
                     DiagnosticCode::game_scene_invalid, "Panel cannot declare text, font, action, or text_color", source,
@@ -2305,9 +3665,33 @@ Result<UiElementPlan> parse_ui(
         }
         return plan;
     }
-    auto text = string_value(object, "text", source, pointer, DiagnosticCode::game_scene_invalid);
-    if (!text) return std::unexpected(std::move(text.error()));
-    plan.text = symbols.intern(std::move(*text));
+    const bool has_text = optional(object, "text") != nullptr;
+    const bool has_text_key = optional(object, "text_key") != nullptr;
+    if (!has_text && !has_text_key) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_scene_invalid, "Text and button elements require text or text_key", source, pointer));
+    }
+    if (has_text_key && (!version_0_6 || has_text)) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_localization_invalid,
+            "text_key requires SceneSpec 0.6 and cannot be combined with text", source, pointer + "/text_key"));
+    }
+    if (has_text_key) {
+        auto text_key = string_value(
+            object, "text_key", source, pointer, DiagnosticCode::game_localization_invalid);
+        if (!text_key) return std::unexpected(std::move(text_key.error()));
+        auto key_index = index_by_name(
+            localization_keys, *text_key, "localization key", source, pointer + "/text_key",
+            DiagnosticCode::game_localization_invalid);
+        if (!key_index) return std::unexpected(std::move(key_index.error()));
+        plan.text = symbols.intern(std::move(*text_key));
+        plan.localized = true;
+        plan.localization_key_index = *key_index;
+    } else {
+        auto text = string_value(object, "text", source, pointer, DiagnosticCode::game_scene_invalid);
+        if (!text) return std::unexpected(std::move(text.error()));
+        plan.text = symbols.intern(std::move(*text));
+    }
     auto font = string_value(object, "font", source, pointer, DiagnosticCode::game_scene_invalid);
     if (!font) return std::unexpected(std::move(font.error()));
     auto font_index = index_by_name(
@@ -2342,15 +3726,32 @@ Result<GameScenePlan> parse_scene(
     const std::vector<IntStatePlan>& state_plans,
     const std::unordered_map<std::string, std::uint32_t>& assets,
     const std::vector<GameAssetPlan>& asset_plans,
+    const std::unordered_map<std::string, std::uint32_t>& animations,
+    const std::vector<GameAnimationPlan>& animation_plans,
+    const std::unordered_map<std::string, std::uint32_t>& prefabs,
+    const std::vector<PrefabSource>& prefab_sources,
+    const std::unordered_map<std::string, std::uint32_t>& localization_keys,
+    const std::unordered_map<std::string, std::uint32_t>& locales,
+    const std::unordered_map<std::string, std::uint32_t>& input_profiles,
+    const GameSavePlan& save_plan,
+    const GameWindowPlan& window_plan,
     Symbols& symbols) {
     const auto source = source_path.string();
     const bool version_0_3 = expected_version != GameSchemaVersion::v0_2;
     const bool version_0_4 = expected_version == GameSchemaVersion::v0_4 ||
-                             expected_version == GameSchemaVersion::v0_5;
-    const bool version_0_5 = expected_version == GameSchemaVersion::v0_5;
+                             expected_version == GameSchemaVersion::v0_5 ||
+                             expected_version == GameSchemaVersion::v0_6;
+    const bool version_0_5 = expected_version == GameSchemaVersion::v0_5 ||
+                             expected_version == GameSchemaVersion::v0_6;
+    const bool version_0_6 = expected_version == GameSchemaVersion::v0_6;
     if (auto rejected = reject_unknown(
             document,
-            version_0_4
+            version_0_6
+                ? std::initializer_list<std::string_view>{
+                      "schema_version", "id", "world", "camera", "collision", "grids", "spawn_groups", "pools",
+                      "systems", "collision_rules", "rules", "ui", "ui_stacks", "tile_layers", "fields",
+                      "particle_emitters", "persistent"}
+                : version_0_4
                 ? std::initializer_list<std::string_view>{
                       "schema_version", "id", "world", "camera", "collision", "grids", "spawn_groups", "pools",
                       "systems", "collision_rules", "rules", "ui"}
@@ -2400,7 +3801,12 @@ Result<GameScenePlan> parse_scene(
     auto camera = required(document, "camera", source, "/", DiagnosticCode::game_scene_invalid);
     if (!camera) return std::unexpected(std::move(camera.error()));
     if (auto rejected = reject_unknown(
-            **camera, {"position", "half_extent"}, source, "/camera", DiagnosticCode::game_scene_invalid);
+            **camera,
+            version_0_6
+                ? std::initializer_list<std::string_view>{
+                      "mode", "position", "half_extent", "target", "offset", "bounds", "pixel_snap"}
+                : std::initializer_list<std::string_view>{"position", "half_extent"},
+            source, "/camera", DiagnosticCode::game_scene_invalid);
         !rejected) {
         return std::unexpected(std::move(rejected.error()));
     }
@@ -2415,6 +3821,39 @@ Result<GameScenePlan> parse_scene(
     }
     plan.camera_position = *camera_position;
     plan.camera_half_extent = *camera_half;
+    plan.camera.position = *camera_position;
+    plan.camera.half_extent = *camera_half;
+    if (version_0_6) {
+        const auto* mode_member = optional(**camera, "mode");
+        const auto mode = mode_member == nullptr ? std::string{"fixed"}
+                                                 : mode_member->is_string() ? mode_member->get<std::string>() : std::string{};
+        if (mode == "fixed") plan.camera.mode = GameCameraMode::fixed;
+        else if (mode == "follow") plan.camera.mode = GameCameraMode::follow;
+        else {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_presentation_invalid, "Camera mode must be fixed or follow", source,
+                "/camera/mode"));
+        }
+        auto offset = optional_vec2(
+            **camera, "offset", {}, source, "/camera", DiagnosticCode::game_presentation_invalid);
+        if (!offset) return std::unexpected(std::move(offset.error()));
+        plan.camera.follow_offset = *offset;
+        auto pixel_snap = optional_bool(
+            **camera, "pixel_snap", false, source, "/camera", DiagnosticCode::game_presentation_invalid);
+        if (!pixel_snap) return std::unexpected(std::move(pixel_snap.error()));
+        plan.camera.pixel_snap = *pixel_snap;
+        if (const auto* bounds = optional(**camera, "bounds"); bounds != nullptr) {
+            auto parsed = rect4(*bounds, source, "/camera/bounds", DiagnosticCode::game_presentation_invalid);
+            if (!parsed) return std::unexpected(std::move(parsed.error()));
+            if (parsed->max.x <= parsed->min.x || parsed->max.y <= parsed->min.y) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_presentation_invalid, "Camera bounds are invalid", source,
+                    "/camera/bounds"));
+            }
+            plan.camera.bounds = *parsed;
+            plan.camera.has_bounds = true;
+        }
+    }
 
     if (const auto* collision = optional(document, "collision"); collision != nullptr) {
         if (auto rejected = reject_unknown(
@@ -2506,6 +3945,94 @@ Result<GameScenePlan> parse_scene(
         }
     }
 
+    std::unordered_map<std::string, std::uint32_t> tile_layer_indices{};
+    std::unordered_map<std::string, std::uint32_t> field_indices{};
+    std::unordered_map<std::string, std::uint32_t> particle_emitter_indices{};
+    if (version_0_6) {
+        std::uint64_t aggregate_cells = 0U;
+        if (const auto* layers = optional(document, "tile_layers"); layers != nullptr) {
+            if (!layers->is_array() || layers->size() > 64U) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_tile_field_invalid, "tile_layers must contain at most 64 items", source,
+                    "/tile_layers"));
+            }
+            plan.tile_layers.reserve(layers->size());
+            for (std::size_t index = 0U; index < layers->size(); ++index) {
+                auto layer = parse_tile_layer(
+                    (*layers)[index], index, grid_indices, plan.grids, assets, asset_plans, symbols, source);
+                if (!layer) return std::unexpected(std::move(layer.error()));
+                const auto name = std::string{symbols.view(layer->symbol)};
+                if (!tile_layer_indices.emplace(name, static_cast<std::uint32_t>(plan.tile_layers.size())).second) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_tile_field_invalid, "Scene contains duplicate tile layer ids", source,
+                        "/tile_layers/" + std::to_string(index) + "/id"));
+                }
+                aggregate_cells += layer->initial_cells.size();
+                if (aggregate_cells > 4'000'000U) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_tile_field_invalid,
+                        "Tile and field cells exceed the four-million scene limit", source, "/tile_layers"));
+                }
+                plan.tile_layers.push_back(std::move(*layer));
+            }
+        }
+        if (const auto* fields = optional(document, "fields"); fields != nullptr) {
+            if (!fields->is_array() || fields->size() > 64U) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_tile_field_invalid, "fields must contain at most 64 items", source,
+                    "/fields"));
+            }
+            plan.fields.reserve(fields->size());
+            for (std::size_t index = 0U; index < fields->size(); ++index) {
+                auto field = parse_field((*fields)[index], index, grid_indices, plan.grids, symbols, source);
+                if (!field) return std::unexpected(std::move(field.error()));
+                const auto name = std::string{symbols.view(field->symbol)};
+                if (!field_indices.emplace(name, static_cast<std::uint32_t>(plan.fields.size())).second) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_tile_field_invalid, "Scene contains duplicate field ids", source,
+                        "/fields/" + std::to_string(index) + "/id"));
+                }
+                aggregate_cells += field->initial_cells.size();
+                if (aggregate_cells > 4'000'000U) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_tile_field_invalid,
+                        "Tile and field cells exceed the four-million scene limit", source, "/fields"));
+                }
+                plan.fields.push_back(std::move(*field));
+            }
+        }
+        if (const auto* emitters = optional(document, "particle_emitters"); emitters != nullptr) {
+            if (!emitters->is_array() || emitters->size() > 64U) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_presentation_invalid,
+                    "particle_emitters must contain at most 64 items", source, "/particle_emitters"));
+            }
+            std::uint32_t aggregate_particles = 0U;
+            plan.particle_emitters.reserve(emitters->size());
+            for (std::size_t index = 0U; index < emitters->size(); ++index) {
+                auto emitter = parse_particle_emitter(
+                    (*emitters)[index], index, assets, asset_plans, symbols, source);
+                if (!emitter) return std::unexpected(std::move(emitter.error()));
+                if (aggregate_particles > 100'000U - emitter->capacity) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_presentation_invalid,
+                        "Particle capacities exceed the one-hundred-thousand scene limit", source,
+                        "/particle_emitters"));
+                }
+                aggregate_particles += emitter->capacity;
+                const auto name = std::string{symbols.view(emitter->symbol)};
+                if (!particle_emitter_indices.emplace(
+                        name, static_cast<std::uint32_t>(plan.particle_emitters.size())).second) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_presentation_invalid,
+                        "Scene contains duplicate particle emitter ids", source,
+                        "/particle_emitters/" + std::to_string(index) + "/id"));
+                }
+                plan.particle_emitters.push_back(*emitter);
+            }
+        }
+    }
+
     auto spawns = required(document, "spawn_groups", source, "/", DiagnosticCode::game_scene_invalid);
     if (!spawns) return std::unexpected(std::move(spawns.error()));
     if (!(*spawns)->is_array() || (*spawns)->size() > GameScenePlan::max_spawn_groups) {
@@ -2516,8 +4043,27 @@ Result<GameScenePlan> parse_scene(
     std::unordered_map<std::string, std::uint32_t> spawn_group_indices{};
     plan.spawn_groups.reserve((*spawns)->size());
     for (std::size_t index = 0U; index < (*spawns)->size(); ++index) {
+        Json expanded_spawn = (**spawns)[index];
+        if (version_0_6 && optional(expanded_spawn, "prefab") != nullptr) {
+            auto prefab = string_value(
+                expanded_spawn, "prefab", source, "/spawn_groups/" + std::to_string(index),
+                DiagnosticCode::game_prefab_invalid);
+            if (!prefab) return std::unexpected(std::move(prefab.error()));
+            auto prefab_index = index_by_name(
+                prefabs, *prefab, "prefab", source, "/spawn_groups/" + std::to_string(index) + "/prefab",
+                DiagnosticCode::game_prefab_invalid);
+            if (!prefab_index) return std::unexpected(std::move(prefab_index.error()));
+            const auto& prefab_document = prefab_sources[*prefab_index].document;
+            for (const auto field : {"transform", "velocity", "sprite", "collider", "animation"}) {
+                if (optional(expanded_spawn, field) == nullptr && optional(prefab_document, field) != nullptr) {
+                    expanded_spawn[field] = *optional(prefab_document, field);
+                }
+            }
+            expanded_spawn.erase("prefab");
+        }
         auto spawn = parse_spawn_group(
-            (**spawns)[index], index, version_0_3, version_0_5, assets, asset_plans, symbols, source);
+            expanded_spawn, index, version_0_3, version_0_5, version_0_6, assets, asset_plans,
+            animations, animation_plans, symbols, source);
         if (!spawn) return std::unexpected(std::move(spawn.error()));
         if (!spawn_positions_representable(*spawn)) {
             return std::unexpected(game_error(
@@ -2538,6 +4084,39 @@ Result<GameScenePlan> parse_scene(
         spawn_group_indices.emplace(
             std::string{symbols.view(spawn->symbol)}, static_cast<std::uint32_t>(plan.spawn_groups.size()));
         plan.spawn_groups.push_back(*spawn);
+    }
+    if (version_0_6) {
+        auto persistent = optional_bool(
+            document, "persistent", false, source, "/", DiagnosticCode::game_save_invalid);
+        if (!persistent) return std::unexpected(std::move(persistent.error()));
+        plan.persistent = *persistent;
+        if (plan.camera.mode == GameCameraMode::follow) {
+            auto target = required(**camera, "target", source, "/camera", DiagnosticCode::game_presentation_invalid);
+            if (!target) return std::unexpected(std::move(target.error()));
+            if (auto rejected = reject_unknown(
+                    **target, {"group", "index"}, source, "/camera/target",
+                    DiagnosticCode::game_presentation_invalid);
+                !rejected) {
+                return std::unexpected(std::move(rejected.error()));
+            }
+            auto group = string_value(
+                **target, "group", source, "/camera/target", DiagnosticCode::game_presentation_invalid);
+            if (!group) return std::unexpected(std::move(group.error()));
+            auto group_index = index_by_name(
+                spawn_group_indices, *group, "spawn group", source, "/camera/target/group",
+                DiagnosticCode::game_presentation_invalid);
+            if (!group_index) return std::unexpected(std::move(group_index.error()));
+            auto item = u32_value(
+                **target, "index", 0U, plan.spawn_groups[*group_index].count - 1U, source,
+                "/camera/target", DiagnosticCode::game_presentation_invalid);
+            if (!item) return std::unexpected(std::move(item.error()));
+            plan.camera.follow_group_index = *group_index;
+            plan.camera.follow_item_index = *item;
+        } else if (optional(**camera, "target") != nullptr) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_presentation_invalid, "Fixed camera cannot declare a target", source,
+                "/camera/target"));
+        }
     }
 
     std::unordered_map<std::string, std::uint32_t> pool_indices{};
@@ -2629,8 +4208,11 @@ Result<GameScenePlan> parse_scene(
                     (*rules)[index], index, actions, states, state_plans, spawn_group_indices, plan.spawn_groups,
                     pool_indices, plan.pools, grid_indices, system_indices, plan.systems,
                     collision_rule_indices, plan.collision_rules,
-                    version_0_5,
-                    assets, asset_plans,
+                    version_0_5, version_0_6,
+                    assets, asset_plans, animations, animation_plans,
+                    tile_layer_indices, plan.tile_layers, field_indices, plan.fields,
+                    locales, input_profiles, particle_emitter_indices, plan.particle_emitters,
+                    plan.grids, save_plan,
                     symbols, source);
                 if (!rule) return std::unexpected(std::move(rule.error()));
                 if (!rule_ids.insert(rule->symbol).second) {
@@ -2642,22 +4224,198 @@ Result<GameScenePlan> parse_scene(
             }
         }
     }
+    if (version_0_6 && optional(document, "ui_stacks") != nullptr && optional(document, "ui") == nullptr) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_presentation_invalid,
+            "ui_stacks requires a ui array", source, "/ui_stacks"));
+    }
     if (const auto* ui = optional(document, "ui"); ui != nullptr) {
         if (!ui->is_array() || ui->size() > GameScenePlan::max_ui_elements) {
             return std::unexpected(game_error(
                 DiagnosticCode::game_scene_invalid, "ui must be a bounded array", source, "/ui"));
         }
         std::unordered_set<SymbolId> ui_ids{};
+        std::unordered_map<std::string, std::uint32_t> ui_indices{};
         plan.ui.reserve(ui->size());
         for (std::size_t index = 0U; index < ui->size(); ++index) {
-            auto element = parse_ui((*ui)[index], index, actions, assets, asset_plans, symbols, source);
+            auto element = parse_ui(
+                (*ui)[index], index, actions, assets, asset_plans, version_0_6, localization_keys, window_plan,
+                symbols, source);
             if (!element) return std::unexpected(std::move(element.error()));
             if (!ui_ids.insert(element->symbol).second) {
                 return std::unexpected(game_error(
                     DiagnosticCode::game_scene_invalid, "Scene contains duplicate UI ids", source,
                     "/ui/" + std::to_string(index) + "/id"));
             }
+            ui_indices.emplace(std::string{symbols.view(element->symbol)}, static_cast<std::uint32_t>(plan.ui.size()));
             plan.ui.push_back(*element);
+        }
+        if (version_0_6) {
+            if (const auto* stacks = optional(document, "ui_stacks"); stacks != nullptr) {
+                if (!stacks->is_array() || stacks->size() > 128U) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_presentation_invalid, "ui_stacks must contain at most 128 items", source,
+                        "/ui_stacks"));
+                }
+                std::unordered_set<std::uint32_t> owned_children{};
+                std::unordered_set<SymbolId> stack_ids{};
+                plan.ui_stacks.reserve(stacks->size());
+                for (std::size_t stack_index = 0U; stack_index < stacks->size(); ++stack_index) {
+                    const auto& stack = (*stacks)[stack_index];
+                    const auto stack_pointer = "/ui_stacks/" + std::to_string(stack_index);
+                    if (auto rejected = reject_unknown(
+                            stack, {"id", "direction", "position", "size", "padding", "spacing", "anchor", "children"},
+                            source, stack_pointer, DiagnosticCode::game_presentation_invalid);
+                        !rejected) {
+                        return std::unexpected(std::move(rejected.error()));
+                    }
+                    auto stack_id = string_value(
+                        stack, "id", source, stack_pointer, DiagnosticCode::game_presentation_invalid);
+                    if (!stack_id) return std::unexpected(std::move(stack_id.error()));
+                    GameUiStackPlan stack_plan{};
+                    stack_plan.symbol = symbols.intern(std::move(*stack_id));
+                    if (!stack_ids.insert(stack_plan.symbol).second) {
+                        return std::unexpected(game_error(
+                            DiagnosticCode::game_presentation_invalid, "Duplicate UI stack id", source,
+                            stack_pointer + "/id"));
+                    }
+                    auto direction = string_value(
+                        stack, "direction", source, stack_pointer, DiagnosticCode::game_presentation_invalid);
+                    if (!direction) return std::unexpected(std::move(direction.error()));
+                    if (*direction == "horizontal") stack_plan.direction = GameStackDirection::horizontal;
+                    else if (*direction == "vertical") stack_plan.direction = GameStackDirection::vertical;
+                    else {
+                        return std::unexpected(game_error(
+                            DiagnosticCode::game_presentation_invalid,
+                            "UI stack direction must be horizontal or vertical", source,
+                            stack_pointer + "/direction"));
+                    }
+                    auto position_member = required(
+                        stack, "position", source, stack_pointer, DiagnosticCode::game_presentation_invalid);
+                    if (!position_member) return std::unexpected(std::move(position_member.error()));
+                    auto position = vec2(
+                        **position_member, source, stack_pointer + "/position",
+                        DiagnosticCode::game_presentation_invalid);
+                    if (!position) return std::unexpected(std::move(position.error()));
+                    auto size_member = required(
+                        stack, "size", source, stack_pointer, DiagnosticCode::game_presentation_invalid);
+                    if (!size_member) return std::unexpected(std::move(size_member.error()));
+                    auto size = vec2(
+                        **size_member, source, stack_pointer + "/size", DiagnosticCode::game_presentation_invalid);
+                    if (!size) return std::unexpected(std::move(size.error()));
+                    if (size->x <= 0.0F || size->y <= 0.0F) {
+                        return std::unexpected(game_error(
+                            DiagnosticCode::game_presentation_invalid, "UI stack size must be positive", source,
+                            stack_pointer + "/size"));
+                    }
+                    auto padding = optional_vec2(
+                        stack, "padding", {}, source, stack_pointer, DiagnosticCode::game_presentation_invalid);
+                    if (!padding) return std::unexpected(std::move(padding.error()));
+                    if (padding->x < 0.0F || padding->y < 0.0F) {
+                        return std::unexpected(game_error(
+                            DiagnosticCode::game_presentation_invalid, "UI stack padding cannot be negative", source,
+                            stack_pointer + "/padding"));
+                    }
+                    auto spacing = optional_number(
+                        stack, "spacing", 0.0F, source, stack_pointer,
+                        DiagnosticCode::game_presentation_invalid);
+                    if (!spacing) return std::unexpected(std::move(spacing.error()));
+                    if (*spacing < 0.0F) {
+                        return std::unexpected(game_error(
+                            DiagnosticCode::game_presentation_invalid, "UI stack spacing cannot be negative", source,
+                            stack_pointer + "/spacing"));
+                    }
+                    GameUiAnchor anchor = GameUiAnchor::top_left;
+                    if (optional(stack, "anchor") != nullptr) {
+                        auto anchor_name = string_value(
+                            stack, "anchor", source, stack_pointer, DiagnosticCode::game_presentation_invalid);
+                        if (!anchor_name) return std::unexpected(std::move(anchor_name.error()));
+                        auto parsed_anchor = parse_ui_anchor(*anchor_name, source, stack_pointer + "/anchor");
+                        if (!parsed_anchor) return std::unexpected(std::move(parsed_anchor.error()));
+                        anchor = *parsed_anchor;
+                    }
+                    stack_plan.position = *position;
+                    stack_plan.size = *size;
+                    stack_plan.padding = *padding;
+                    stack_plan.spacing = *spacing;
+                    stack_plan.anchor = anchor;
+                    const float window_width = static_cast<float>(window_plan.virtual_width);
+                    const float window_height = static_cast<float>(window_plan.virtual_height);
+                    const auto center = anchored_ui_center(anchor, *size, window_width, window_height);
+                    const Vec2 container_center{center.x + position->x, center.y + position->y};
+                    const Vec2 content_min{
+                        container_center.x - size->x * 0.5F + padding->x,
+                        container_center.y - size->y * 0.5F + padding->y,
+                    };
+                    const Vec2 content_max{
+                        container_center.x + size->x * 0.5F - padding->x,
+                        container_center.y + size->y * 0.5F - padding->y,
+                    };
+                    if (content_min.x > content_max.x || content_min.y > content_max.y) {
+                        return std::unexpected(game_error(
+                            DiagnosticCode::game_presentation_invalid,
+                            "UI stack padding exceeds its content bounds", source, stack_pointer));
+                    }
+                    auto children = required(
+                        stack, "children", source, stack_pointer, DiagnosticCode::game_presentation_invalid);
+                    if (!children) return std::unexpected(std::move(children.error()));
+                    if (!(*children)->is_array() || (*children)->empty() || (*children)->size() > 128U) {
+                        return std::unexpected(game_error(
+                            DiagnosticCode::game_presentation_invalid,
+                            "UI stack children must be a non-empty bounded array", source,
+                            stack_pointer + "/children"));
+                    }
+                    Vec2 cursor = content_min;
+                    for (std::size_t child_index = 0U; child_index < (*children)->size(); ++child_index) {
+                        if (!(**children)[child_index].is_string()) {
+                            return std::unexpected(game_error(
+                                DiagnosticCode::game_presentation_invalid, "UI stack child must be an id string", source,
+                                stack_pointer + "/children/" + std::to_string(child_index)));
+                        }
+                        const auto& child_name = (**children)[child_index].get_ref<const std::string&>();
+                        auto child = index_by_name(
+                            ui_indices, child_name, "UI element", source,
+                            stack_pointer + "/children/" + std::to_string(child_index),
+                            DiagnosticCode::game_presentation_invalid);
+                        if (!child) return std::unexpected(std::move(child.error()));
+                        if (!owned_children.insert(*child).second) {
+                            return std::unexpected(game_error(
+                                DiagnosticCode::game_presentation_invalid,
+                                "A UI element may belong to only one stack", source,
+                                stack_pointer + "/children/" + std::to_string(child_index)));
+                        }
+                        auto& element = plan.ui[*child];
+                        element.position = stack_plan.direction == GameStackDirection::horizontal
+                                               ? Vec2{cursor.x + element.size.x * 0.5F,
+                                                      content_min.y + element.size.y * 0.5F}
+                                               : Vec2{content_min.x + element.size.x * 0.5F,
+                                                      cursor.y + element.size.y * 0.5F};
+                        stack_plan.child_indices.push_back(*child);
+                        const Vec2 child_min{
+                            element.position.x - element.size.x * 0.5F,
+                            element.position.y - element.size.y * 0.5F,
+                        };
+                        const Vec2 child_max{
+                            element.position.x + element.size.x * 0.5F,
+                            element.position.y + element.size.y * 0.5F,
+                        };
+                        if (child_min.x < content_min.x - 0.0001F ||
+                            child_min.y < content_min.y - 0.0001F ||
+                            child_max.x > content_max.x + 0.0001F ||
+                            child_max.y > content_max.y + 0.0001F) {
+                            return std::unexpected(game_error(
+                                DiagnosticCode::game_presentation_invalid,
+                                "UI stack child rectangle exceeds its content bounds", source, stack_pointer));
+                        }
+                        if (stack_plan.direction == GameStackDirection::horizontal) {
+                            cursor.x += element.size.x + *spacing;
+                        } else {
+                            cursor.y += element.size.y + *spacing;
+                        }
+                    }
+                    plan.ui_stacks.push_back(std::move(stack_plan));
+                }
+            }
         }
     }
 
@@ -3217,7 +4975,9 @@ Result<void> validate_ui_text(
     const Symbols& symbols) {
     for (std::size_t element_index = 0U; element_index < scene.ui.size(); ++element_index) {
         const auto& element = scene.ui[element_index];
-        if (element.kind == UiElementKind::panel) continue;
+        // Localized elements store the key symbol here; every resolved locale
+        // value is validated after the complete GamePlan has been assembled.
+        if (element.kind == UiElementKind::panel || element.localized) continue;
         const auto text = symbols.view(element.text);
         const auto source = scene.source_path.string();
         const auto pointer = "/ui/" + std::to_string(element_index) + "/text";
@@ -3309,7 +5069,8 @@ std::string_view GamePlan::schema_version_text() const noexcept {
     case GameSchemaVersion::v0_2: return legacy_schema_version;
     case GameSchemaVersion::v0_3: return event_action_schema_version;
     case GameSchemaVersion::v0_4: return object_pool_schema_version;
-    case GameSchemaVersion::v0_5: return supported_schema_version;
+    case GameSchemaVersion::v0_5: return motion_contacts_schema_version;
+    case GameSchemaVersion::v0_6: return supported_schema_version;
     }
     return {};
 }
@@ -3319,6 +5080,7 @@ std::string_view to_string(const GameAssetKind value) noexcept {
     case GameAssetKind::png: return "png";
     case GameAssetKind::wav: return "wav";
     case GameAssetKind::font: return "font";
+    case GameAssetKind::music: return "music";
     }
     return "png";
 }
@@ -3355,6 +5117,7 @@ std::string_view to_string(const GameRuleEventKind value) noexcept {
     case GameRuleEventKind::collision: return "collision";
     case GameRuleEventKind::contact_begin: return "contact_begin";
     case GameRuleEventKind::contact_end: return "contact_end";
+    case GameRuleEventKind::animation_finished: return "animation_finished";
     }
     return "scene_enter";
 }
@@ -3374,6 +5137,22 @@ std::string_view to_string(const GameRuleActionKind value) noexcept {
     case GameRuleActionKind::spawn_from_pool: return "spawn_from_pool";
     case GameRuleActionKind::release_to_pool: return "release_to_pool";
     case GameRuleActionKind::reset_pool: return "reset_pool";
+    case GameRuleActionKind::play_animation: return "play_animation";
+    case GameRuleActionKind::stop_animation: return "stop_animation";
+    case GameRuleActionKind::set_tile: return "set_tile";
+    case GameRuleActionKind::set_field: return "set_field";
+    case GameRuleActionKind::add_field: return "add_field";
+    case GameRuleActionKind::save_slot: return "save_slot";
+    case GameRuleActionKind::load_slot: return "load_slot";
+    case GameRuleActionKind::delete_slot: return "delete_slot";
+    case GameRuleActionKind::camera_shake: return "camera_shake";
+    case GameRuleActionKind::set_camera_zoom: return "set_camera_zoom";
+    case GameRuleActionKind::set_locale: return "set_locale";
+    case GameRuleActionKind::set_input_profile: return "set_input_profile";
+    case GameRuleActionKind::play_music: return "play_music";
+    case GameRuleActionKind::stop_music: return "stop_music";
+    case GameRuleActionKind::set_music_volume: return "set_music_volume";
+    case GameRuleActionKind::emit_particles: return "emit_particles";
     }
     return "set_int_state";
 }
@@ -3413,6 +5192,10 @@ std::string_view to_string(const GameTestAssertionKind value) noexcept {
     case GameTestAssertionKind::position: return "position";
     case GameTestAssertionKind::velocity: return "velocity";
     case GameTestAssertionKind::runtime_metric: return "runtime_metric";
+    case GameTestAssertionKind::animation_frame: return "animation_frame";
+    case GameTestAssertionKind::tile_value: return "tile_value";
+    case GameTestAssertionKind::field_value: return "field_value";
+    case GameTestAssertionKind::camera_position: return "camera_position";
     }
     return "current_scene";
 }
@@ -3448,8 +5231,37 @@ std::string_view to_string(const GameTestMetric value) noexcept {
     case GameTestMetric::pool_lifetime_checks: return "pool_lifetime_checks";
     case GameTestMetric::active_pooled_entities: return "active_pooled_entities";
     case GameTestMetric::peak_active_pooled_entities: return "peak_active_pooled_entities";
+    case GameTestMetric::animation_frame_updates: return "animation_frame_updates";
+    case GameTestMetric::animation_completions: return "animation_completions";
+    case GameTestMetric::tile_reads: return "tile_reads";
+    case GameTestMetric::tile_writes: return "tile_writes";
+    case GameTestMetric::field_reads: return "field_reads";
+    case GameTestMetric::field_writes: return "field_writes";
+    case GameTestMetric::save_attempts: return "save_attempts";
+    case GameTestMetric::save_successes: return "save_successes";
+    case GameTestMetric::save_failures: return "save_failures";
+    case GameTestMetric::particle_emits: return "particle_emits";
+    case GameTestMetric::particle_updates: return "particle_updates";
+    case GameTestMetric::particle_exhaustions: return "particle_exhaustions";
+    case GameTestMetric::particle_slot_operations: return "particle_slot_operations";
+    case GameTestMetric::peak_active_particles: return "peak_active_particles";
+    case GameTestMetric::camera_follow_updates: return "camera_follow_updates";
+    case GameTestMetric::camera_shake_updates: return "camera_shake_updates";
+    case GameTestMetric::music_stream_bytes: return "music_stream_bytes";
+    case GameTestMetric::music_underruns: return "music_underruns";
+    case GameTestMetric::input_profile_switches: return "input_profile_switches";
+    case GameTestMetric::locale_switches: return "locale_switches";
     }
     return "rule_executions";
+}
+
+std::string_view to_string(const GameAnimationMode value) noexcept {
+    switch (value) {
+    case GameAnimationMode::once: return "once";
+    case GameAnimationMode::loop: return "loop";
+    case GameAnimationMode::ping_pong: return "ping_pong";
+    }
+    return "loop";
 }
 
 std::string_view to_string(const GameReactionKind value) noexcept {
@@ -3497,8 +5309,18 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
     StableHash hash{};
     const bool version_0_3 = plan.schema_version != GameSchemaVersion::v0_2;
     const bool version_0_4 = plan.schema_version == GameSchemaVersion::v0_4 ||
-                             plan.schema_version == GameSchemaVersion::v0_5;
-    const bool version_0_5 = plan.schema_version == GameSchemaVersion::v0_5;
+                             plan.schema_version == GameSchemaVersion::v0_5 ||
+                             plan.schema_version == GameSchemaVersion::v0_6;
+    const bool version_0_5 = plan.schema_version == GameSchemaVersion::v0_5 ||
+                             plan.schema_version == GameSchemaVersion::v0_6;
+    const bool version_0_6 = plan.schema_version == GameSchemaVersion::v0_6;
+    const auto hash_content_path = [&](const std::filesystem::path& path) {
+        if (version_0_6) {
+            hash.text(path.lexically_relative(plan.content_root).generic_string());
+        } else {
+            hash.text(path.generic_string());
+        }
+    };
     hash.text(plan.schema_version_text());
     hash.scalar(plan.source_hash);
     if (version_0_3) hash.scalar(plan.seed);
@@ -3515,8 +5337,8 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
     for (const auto& asset : plan.assets) {
         hash.scalar(asset.symbol);
         hash.scalar(asset.kind);
-        hash.text(asset.path.generic_string());
-        hash.text(asset.metadata_path.generic_string());
+        hash_content_path(asset.path);
+        hash_content_path(asset.metadata_path);
         hash.scalar(asset.line_height);
         for (const auto& glyph : asset.glyphs) {
             hash.scalar(glyph.codepoint);
@@ -3525,6 +5347,77 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
             hash_vec2(hash, glyph.bearing);
             hash.scalar(glyph.advance);
         }
+    }
+    if (version_0_6) {
+        for (const auto& animation : plan.animations) {
+            hash.scalar(animation.symbol);
+            hash.scalar(animation.asset_index);
+            hash.scalar(animation.mode);
+            for (const auto& frame : animation.frames) {
+                hash_rect(hash, frame.uv);
+                hash.scalar(frame.duration_ticks);
+            }
+        }
+        for (const auto& prefab : plan.prefabs) {
+            hash.scalar(prefab.symbol);
+            hash_content_path(prefab.path);
+            hash.scalar(prefab.has_transform);
+            hash_vec2(hash, prefab.transform.position_offset);
+            hash.scalar(prefab.transform.rotation);
+            hash_vec2(hash, prefab.transform.scale);
+            hash.scalar(prefab.has_velocity);
+            hash_vec2(hash, prefab.velocity.linear);
+            hash.scalar(prefab.velocity.angular);
+            hash.scalar(prefab.has_sprite);
+            hash.scalar(prefab.sprite.asset_index);
+            hash_vec2(hash, prefab.sprite.size);
+            hash_vec2(hash, prefab.sprite.pivot);
+            hash_rect(hash, prefab.sprite.uv);
+            hash_color(hash, prefab.sprite.tint);
+            hash.scalar(prefab.sprite.layer);
+            hash.scalar(prefab.sprite.visible);
+            hash.scalar(prefab.has_collider);
+            hash_vec2(hash, prefab.collider.offset);
+            hash_vec2(hash, prefab.collider.half_extent);
+            hash.scalar(prefab.collider.group);
+            hash.scalar(prefab.collider.motion);
+            hash.scalar(prefab.collider.enabled);
+            hash.scalar(prefab.has_animation);
+            hash.scalar(prefab.animation_index);
+            hash.scalar(prefab.animation_autoplay);
+        }
+        for (const auto& localization : plan.localizations) {
+            hash.scalar(localization.locale);
+            hash_content_path(localization.path);
+            for (const auto& entry : localization.entries) {
+                hash.scalar(entry.key);
+                hash.scalar(entry.value);
+            }
+        }
+        hash.scalar(plan.default_locale_index);
+        for (const auto& profile : plan.input_profiles) {
+            hash.scalar(profile.symbol);
+            for (const auto& action : profile.actions) {
+                hash.scalar(action.symbol);
+                hash.scalar(action.key_count);
+                for (std::uint32_t index = 0U; index < action.key_count; ++index) hash.scalar(action.keys[index]);
+                hash.scalar(action.gamepad_button_count);
+                for (std::uint32_t index = 0U; index < action.gamepad_button_count; ++index) {
+                    hash.scalar(action.gamepad_buttons[index]);
+                }
+                hash.scalar(action.gamepad_axis_count);
+                for (std::uint32_t index = 0U; index < action.gamepad_axis_count; ++index) {
+                    hash.scalar(action.gamepad_axes[index].axis);
+                    hash.scalar(action.gamepad_axes[index].direction);
+                    hash.scalar(action.gamepad_axes[index].deadzone);
+                }
+                hash.scalar(action.mouse_left);
+            }
+        }
+        hash.scalar(plan.default_input_profile_index);
+        hash.scalar(plan.save.enabled);
+        hash.scalar(plan.save.slot_count);
+        for (const auto state_index : plan.save.state_indices) hash.scalar(state_index);
     }
     for (const auto& action : plan.actions) {
         hash.scalar(action.symbol);
@@ -3542,10 +5435,22 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
     }
     for (const auto& scene : plan.scenes) {
         hash.scalar(scene.symbol);
-        hash.text(scene.source_path.generic_string());
+        hash_content_path(scene.source_path);
         hash.scalar(scene.world_capacity);
         hash_vec2(hash, scene.camera_position);
         hash_vec2(hash, scene.camera_half_extent);
+        if (version_0_6) {
+            hash.scalar(scene.camera.mode);
+            hash_vec2(hash, scene.camera.position);
+            hash_vec2(hash, scene.camera.half_extent);
+            hash.scalar(scene.camera.follow_group_index);
+            hash.scalar(scene.camera.follow_item_index);
+            hash_vec2(hash, scene.camera.follow_offset);
+            hash_rect(hash, scene.camera.bounds);
+            hash.scalar(scene.camera.has_bounds);
+            hash.scalar(scene.camera.pixel_snap);
+            hash.scalar(scene.persistent);
+        }
         hash_rect(hash, scene.collision_bounds);
         hash_vec2(hash, scene.collision_cell_size);
         hash.scalar(scene.max_colliders);
@@ -3591,12 +5496,53 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
             hash.scalar(spawn.collider.motion);
             hash.scalar(spawn.collider.trigger);
             hash.scalar(spawn.collider.enabled);
+            if (version_0_6) {
+                hash.scalar(spawn.initial_animation_index);
+                hash.scalar(spawn.has_initial_animation);
+                hash.scalar(spawn.animation_autoplay);
+            }
         }
         if (version_0_4) {
             for (const auto& pool : scene.pools) {
                 hash.scalar(pool.symbol);
                 hash.scalar(pool.spawn_group_index);
                 hash.scalar(pool.on_exhausted);
+            }
+        }
+        if (version_0_6) {
+            for (const auto& layer : scene.tile_layers) {
+                hash.scalar(layer.symbol);
+                hash.scalar(layer.grid_index);
+                hash.scalar(layer.asset_index);
+                hash.scalar(layer.atlas_columns);
+                hash.scalar(layer.atlas_rows);
+                for (const auto value : layer.initial_cells) hash.scalar(value);
+                hash_color(hash, layer.tint);
+                hash.scalar(layer.layer);
+                hash.scalar(layer.visible);
+            }
+            for (const auto& field : scene.fields) {
+                hash.scalar(field.symbol);
+                hash.scalar(field.grid_index);
+                hash.scalar(field.minimum);
+                hash.scalar(field.maximum);
+                for (const auto value : field.initial_cells) hash.scalar(value);
+            }
+            for (const auto& emitter : scene.particle_emitters) {
+                hash.scalar(emitter.symbol);
+                hash.scalar(emitter.capacity);
+                hash.scalar(emitter.on_exhausted);
+                hash.scalar(emitter.sprite.asset_index);
+                hash_vec2(hash, emitter.sprite.size);
+                hash_vec2(hash, emitter.sprite.pivot);
+                hash_rect(hash, emitter.sprite.uv);
+                hash_color(hash, emitter.sprite.tint);
+                hash.scalar(emitter.sprite.layer);
+                hash.scalar(emitter.sprite.visible);
+                hash.scalar(emitter.lifetime_min_ticks);
+                hash.scalar(emitter.lifetime_max_ticks);
+                hash_vec2(hash, emitter.velocity_min);
+                hash_vec2(hash, emitter.velocity_max);
             }
         }
         for (const auto& system : scene.systems) {
@@ -3642,11 +5588,22 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
                 hash.scalar(rule.event.action_index);
                 hash.scalar(rule.event.interval_ticks);
                 hash.scalar(rule.event.collision_rule_index);
+                if (version_0_6) hash.scalar(rule.event.animation_index);
                 for (const auto& condition : rule.conditions) {
                     hash.scalar(condition.kind);
                     hash.scalar(condition.comparison);
                     hash.scalar(condition.state_index);
                     hash.scalar(condition.spawn_group_index);
+                    if (version_0_6) {
+                        hash.scalar(condition.tile_layer_index);
+                        hash.scalar(condition.field_index);
+                        hash.scalar(condition.cell_source);
+                        hash.scalar(condition.cell_x);
+                        hash.scalar(condition.cell_y);
+                        hash.scalar(condition.cell_target.kind);
+                        hash.scalar(condition.cell_target.spawn_group_index);
+                        hash.scalar(condition.cell_target.item_index);
+                    }
                     hash.scalar(condition.value);
                 }
                 for (const auto& action : rule.actions) {
@@ -3682,6 +5639,34 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
                         hash.scalar(action.has_lifetime);
                         hash.scalar(action.lifetime_ticks);
                     }
+                    if (version_0_6) {
+                        hash.scalar(action.animation_index);
+                        hash.scalar(action.restart_animation);
+                        hash.scalar(action.tile_layer_index);
+                        hash.scalar(action.field_index);
+                        hash.scalar(action.cell_source);
+                        hash.scalar(action.cell_x);
+                        hash.scalar(action.cell_y);
+                        hash.scalar(action.cell_target.kind);
+                        hash.scalar(action.cell_target.spawn_group_index);
+                        hash.scalar(action.cell_target.item_index);
+                        hash.scalar(action.tile_value);
+                        hash.scalar(action.save_slot);
+                        hash.scalar(action.scalar);
+                        hash.scalar(action.duration_ticks);
+                        hash.scalar(action.locale_index);
+                        hash.scalar(action.input_profile_index);
+                        hash.scalar(action.loop);
+                        hash.scalar(action.fade_ticks);
+                        hash.scalar(action.particle_emitter_index);
+                        hash.scalar(action.particle_count);
+                        hash.scalar(action.particle_position_kind);
+                        hash_vec2(hash, action.particle_position);
+                        hash.scalar(action.particle_position_target.kind);
+                        hash.scalar(action.particle_position_target.spawn_group_index);
+                        hash.scalar(action.particle_position_target.item_index);
+                        hash_vec2(hash, action.particle_position_offset);
+                    }
                 }
             }
         }
@@ -3698,6 +5683,23 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
             hash_color(hash, element.text_color);
             hash.scalar(element.layer);
             hash.scalar(element.text_scale);
+            if (version_0_6) {
+                hash.scalar(element.anchor);
+                hash.scalar(element.localized);
+                hash.scalar(element.localization_key_index);
+            }
+        }
+        if (version_0_6) {
+            for (const auto& stack : scene.ui_stacks) {
+                hash.scalar(stack.symbol);
+                hash.scalar(stack.direction);
+                hash_vec2(hash, stack.position);
+                hash_vec2(hash, stack.size);
+                hash_vec2(hash, stack.padding);
+                hash.scalar(stack.spacing);
+                hash.scalar(stack.anchor);
+                for (const auto child : stack.child_indices) hash.scalar(child);
+            }
         }
     }
     for (const auto& transition : plan.transitions) {
@@ -3720,6 +5722,67 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
     return hash.value();
 }
 
+Result<std::uint64_t> compute_game_save_capacity(const GamePlan& plan) {
+    if (!plan.save.enabled) return std::uint64_t{0U};
+    constexpr std::uint64_t maximum_save_bytes = 64ULL * 1024ULL * 1024ULL;
+    std::uint64_t capacity =
+        64U + static_cast<std::uint64_t>(plan.save.state_indices.size()) * 8U +
+        static_cast<std::uint64_t>(plan.scenes.size());
+    const auto add = [&](const std::uint64_t amount) -> bool {
+        if (capacity > maximum_save_bytes || amount > maximum_save_bytes - capacity) {
+            capacity = maximum_save_bytes + 1U;
+            return false;
+        }
+        capacity += amount;
+        return true;
+    };
+    for (const auto& scene : plan.scenes) {
+        if (!scene.persistent) continue;
+        if (!add(81U)) break;
+        for (const auto& group : scene.spawn_groups) {
+            std::uint64_t bytes_per_entity = 45U;
+            if (group.has_velocity) bytes_per_entity += 12U;
+            if (group.has_sprite) bytes_per_entity += 53U;
+            if (group.has_collider) bytes_per_entity += 23U;
+            if (!add(static_cast<std::uint64_t>(group.count) * bytes_per_entity)) break;
+        }
+        if (capacity > maximum_save_bytes) break;
+        if (!add(static_cast<std::uint64_t>(scene.systems.size()) * 7U) ||
+            !add(static_cast<std::uint64_t>(scene.rules.size()) * 8U) ||
+            !add(static_cast<std::uint64_t>(scene.max_contact_pairs) * 12U)) {
+            break;
+        }
+        for (const auto& layer : scene.tile_layers) {
+            if (!add(4U + static_cast<std::uint64_t>(layer.initial_cells.size()) * 4U)) break;
+        }
+        if (capacity > maximum_save_bytes) break;
+        for (const auto& field : scene.fields) {
+            if (!add(4U + static_cast<std::uint64_t>(field.initial_cells.size()) * 4U)) break;
+        }
+        if (capacity > maximum_save_bytes) break;
+        for (const auto& emitter : scene.particle_emitters) {
+            if (!add(24U + static_cast<std::uint64_t>(emitter.capacity) * 41U)) break;
+        }
+        if (capacity > maximum_save_bytes) break;
+        for (const auto& pool : scene.pools) {
+            if (pool.spawn_group_index >= scene.spawn_groups.size() ||
+                !add(24U + static_cast<std::uint64_t>(
+                               scene.spawn_groups[pool.spawn_group_index].count) * 21U)) {
+                capacity = maximum_save_bytes + 1U;
+                break;
+            }
+        }
+        if (capacity > maximum_save_bytes) break;
+    }
+    if (capacity > maximum_save_bytes) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_save_invalid,
+            "Calculated save capacity exceeds 64 MiB",
+            plan.manifest_path.string()));
+    }
+    return capacity;
+}
+
 Result<void> validate_game_plan(const GamePlan& plan) {
     const auto invalid = [&](const std::string_view message) -> Result<void> {
         return std::unexpected(game_error(
@@ -3733,6 +5796,34 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         return std::unexpected(game_error(
             DiagnosticCode::game_collision_interaction_invalid, std::string{message},
             plan.manifest_path.string()));
+    };
+    const auto animation_invalid = [&](const std::string_view message) -> Result<void> {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_animation_invalid, std::string{message}, plan.manifest_path.string()));
+    };
+    const auto prefab_invalid = [&](const std::string_view message) -> Result<void> {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_prefab_invalid, std::string{message}, plan.manifest_path.string()));
+    };
+    const auto save_invalid = [&](const std::string_view message) -> Result<void> {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_save_invalid, std::string{message}, plan.manifest_path.string()));
+    };
+    const auto tile_field_invalid = [&](const std::string_view message) -> Result<void> {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_tile_field_invalid, std::string{message}, plan.manifest_path.string()));
+    };
+    const auto input_profile_invalid = [&](const std::string_view message) -> Result<void> {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_input_profile_invalid, std::string{message}, plan.manifest_path.string()));
+    };
+    const auto localization_invalid = [&](const std::string_view message) -> Result<void> {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_localization_invalid, std::string{message}, plan.manifest_path.string()));
+    };
+    const auto presentation_invalid = [&](const std::string_view message) -> Result<void> {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_presentation_invalid, std::string{message}, plan.manifest_path.string()));
     };
     const auto valid_symbol = [&](const SymbolId id) noexcept {
         return id < plan.symbols.size() && !plan.symbols[id].empty();
@@ -3769,14 +5860,19 @@ Result<void> validate_game_plan(const GamePlan& plan) {
     };
     const bool version_0_3 = plan.schema_version != GameSchemaVersion::v0_2;
     const bool version_0_4 = plan.schema_version == GameSchemaVersion::v0_4 ||
-                             plan.schema_version == GameSchemaVersion::v0_5;
-    const bool version_0_5 = plan.schema_version == GameSchemaVersion::v0_5;
-    if (static_cast<std::uint32_t>(plan.schema_version) > static_cast<std::uint32_t>(GameSchemaVersion::v0_5) ||
+                             plan.schema_version == GameSchemaVersion::v0_5 ||
+                             plan.schema_version == GameSchemaVersion::v0_6;
+    const bool version_0_5 = plan.schema_version == GameSchemaVersion::v0_5 ||
+                             plan.schema_version == GameSchemaVersion::v0_6;
+    const bool version_0_6 = plan.schema_version == GameSchemaVersion::v0_6;
+    if (static_cast<std::uint32_t>(plan.schema_version) > static_cast<std::uint32_t>(GameSchemaVersion::v0_6) ||
         (!version_0_3 && plan.seed != 0U)) {
         return invalid("GamePlan schema version or seed is invalid");
     }
     if (plan.symbols.empty() || !valid_symbol(plan.name) || !valid_symbol(plan.organization) ||
-        !valid_symbol(plan.application) || !valid_symbol(plan.window.title)) {
+        !valid_symbol(plan.application) || !valid_symbol(plan.window.title) ||
+        !safe_preference_component(plan.symbol(plan.organization)) ||
+        !safe_preference_component(plan.symbol(plan.application))) {
         return invalid("GamePlan contains an invalid symbol reference");
     }
     std::unordered_set<std::string_view> unique_symbols{};
@@ -3797,30 +5893,36 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         plan.scenes.empty() || plan.scenes.size() > GamePlan::max_scenes ||
         plan.transitions.size() > GamePlan::max_transitions ||
         plan.fps_actions.size() > GamePlan::max_fps_actions || plan.fps_actions.size() > plan.actions.size() ||
+        plan.animations.size() > GamePlan::max_animations || plan.prefabs.size() > GamePlan::max_prefabs ||
+        plan.localizations.size() > GamePlan::max_localizations ||
+        plan.input_profiles.size() > GamePlan::max_input_profiles ||
+        (!version_0_6 && (!plan.animations.empty() || !plan.prefabs.empty() || !plan.localizations.empty() ||
+                         !plan.input_profiles.empty() || plan.save.enabled)) ||
         plan.start_scene >= plan.scenes.size()) {
         return invalid("GamePlan collection sizes are invalid");
     }
     std::error_code error{};
-    if (plan.content_root.empty() || !std::filesystem::is_directory(plan.content_root, error) || error) {
+    const auto canonical_root = std::filesystem::weakly_canonical(plan.content_root, error);
+    if (plan.content_root.empty() || error || canonical_root != plan.content_root.lexically_normal() ||
+        !std::filesystem::is_directory(canonical_root, error) || error) {
         return invalid("GamePlan content root is invalid");
     }
-    if (plan.manifest_path.empty() || !path_is_within(plan.content_root, plan.manifest_path) ||
-        !std::filesystem::is_regular_file(plan.manifest_path, error) || error) {
+    if (!canonical_content_file(plan.content_root, plan.manifest_path)) {
         return invalid("GamePlan manifest path is invalid");
     }
     std::unordered_set<SymbolId> asset_ids{};
     for (const auto& asset : plan.assets) {
         if (!valid_symbol(asset.symbol) ||
-            static_cast<std::uint32_t>(asset.kind) > static_cast<std::uint32_t>(GameAssetKind::font) ||
-            !path_is_within(plan.content_root, asset.path) || !std::filesystem::is_regular_file(asset.path, error) ||
-            error || !asset_ids.insert(asset.symbol).second) {
+            static_cast<std::uint32_t>(asset.kind) >
+                static_cast<std::uint32_t>(version_0_6 ? GameAssetKind::music : GameAssetKind::font) ||
+            !canonical_content_file(plan.content_root, asset.path) ||
+            !asset_ids.insert(asset.symbol).second) {
             return invalid("GamePlan contains an invalid asset");
         }
         if (asset.kind == GameAssetKind::font) {
             if (asset.glyphs.empty() || asset.glyphs.size() > GameAssetPlan::max_glyphs ||
-                !std::isfinite(asset.line_height) || asset.line_height <= 0.0F || asset.metadata_path.empty() ||
-                !path_is_within(plan.content_root, asset.metadata_path) ||
-                !std::filesystem::is_regular_file(asset.metadata_path, error) || error) {
+                !std::isfinite(asset.line_height) || asset.line_height <= 0.0F ||
+                !canonical_content_file(plan.content_root, asset.metadata_path)) {
                 return invalid("GamePlan contains invalid font metadata");
             }
             std::uint32_t previous_codepoint = 0U;
@@ -3839,20 +5941,141 @@ Result<void> validate_game_plan(const GamePlan& plan) {
             return invalid("Non-font GamePlan asset contains font metadata");
         }
     }
-    std::unordered_set<SymbolId> action_ids{};
-    for (const auto& action : plan.actions) {
-        if (!valid_symbol(action.symbol) || action.key_count > ActionPlan::max_keys) {
-            return invalid("GamePlan contains an invalid action");
+
+    std::unordered_set<SymbolId> animation_ids{};
+    for (const auto& animation : plan.animations) {
+        if (!version_0_6 || !valid_symbol(animation.symbol) || !animation_ids.insert(animation.symbol).second ||
+            animation.asset_index >= plan.assets.size() ||
+            (plan.assets[animation.asset_index].kind != GameAssetKind::png &&
+             plan.assets[animation.asset_index].kind != GameAssetKind::font) ||
+            static_cast<std::uint32_t>(animation.mode) > static_cast<std::uint32_t>(GameAnimationMode::ping_pong) ||
+            animation.frames.empty() || animation.frames.size() > GameAnimationPlan::max_frames) {
+            return animation_invalid("GamePlan contains an invalid animation clip");
         }
-        if (!action_ids.insert(action.symbol).second) return invalid("GamePlan contains duplicate action ids");
+        for (const auto& frame : animation.frames) {
+            if (!valid_uv(frame.uv, true) || frame.duration_ticks == 0U || frame.duration_ticks > 1'000'000U) {
+                return animation_invalid("GamePlan contains an invalid animation frame");
+            }
+        }
+    }
+
+    std::unordered_set<SymbolId> prefab_ids{};
+    for (const auto& prefab : plan.prefabs) {
+        if (!version_0_6 || !valid_symbol(prefab.symbol) || !prefab_ids.insert(prefab.symbol).second ||
+            !canonical_content_file(plan.content_root, prefab.path) ||
+            (!prefab.has_transform && !prefab.has_velocity && !prefab.has_sprite && !prefab.has_collider &&
+             !prefab.has_animation) ||
+            (prefab.has_transform &&
+             (!finite_vec2(prefab.transform.position_offset) || !std::isfinite(prefab.transform.rotation) ||
+              !finite_vec2(prefab.transform.scale) || prefab.transform.scale.x <= 0.0F ||
+              prefab.transform.scale.y <= 0.0F)) ||
+            (prefab.has_velocity && (!finite_vec2(prefab.velocity.linear) || !std::isfinite(prefab.velocity.angular))) ||
+            (prefab.has_sprite &&
+             (prefab.sprite.asset_index >= plan.assets.size() || !finite_vec2(prefab.sprite.size) ||
+              (prefab.sprite.asset_index < plan.assets.size() &&
+               plan.assets[prefab.sprite.asset_index].kind != GameAssetKind::png &&
+               plan.assets[prefab.sprite.asset_index].kind != GameAssetKind::font) ||
+              prefab.sprite.size.x <= 0.0F || prefab.sprite.size.y <= 0.0F || !finite_vec2(prefab.sprite.pivot) ||
+              !valid_uv(prefab.sprite.uv, true) || !valid_color(prefab.sprite.tint))) ||
+            (prefab.has_collider &&
+             (!valid_symbol(prefab.collider.group) || !finite_vec2(prefab.collider.offset) ||
+              !finite_vec2(prefab.collider.half_extent) || prefab.collider.half_extent.x <= 0.0F ||
+              prefab.collider.half_extent.y <= 0.0F || prefab.collider.trigger ||
+              static_cast<std::uint32_t>(prefab.collider.motion) >
+                  static_cast<std::uint32_t>(GameBodyMotion::dynamic_body))) ||
+            (prefab.has_animation && (!prefab.has_sprite || prefab.animation_index >= plan.animations.size()))) {
+            return prefab_invalid("GamePlan contains an invalid prefab");
+        }
+    }
+
+    std::unordered_set<SymbolId> locale_ids{};
+    std::vector<SymbolId> localization_keys{};
+    for (std::size_t locale_index = 0U; locale_index < plan.localizations.size(); ++locale_index) {
+        const auto& locale = plan.localizations[locale_index];
+        if (!version_0_6 || !valid_symbol(locale.locale) || !locale_ids.insert(locale.locale).second ||
+            !canonical_content_file(plan.content_root, locale.path) || locale.entries.empty() ||
+            locale.entries.size() > 4'096U ||
+            (locale_index != 0U && locale.entries.size() != localization_keys.size())) {
+            return localization_invalid("GamePlan contains an invalid localization table");
+        }
+        std::unordered_set<SymbolId> entry_ids{};
+        for (std::size_t entry_index = 0U; entry_index < locale.entries.size(); ++entry_index) {
+            const auto& entry = locale.entries[entry_index];
+            if (!valid_symbol(entry.key) || !valid_symbol(entry.value) || !entry_ids.insert(entry.key).second ||
+                (locale_index != 0U && entry.key != localization_keys[entry_index])) {
+                return localization_invalid("GamePlan localization keys are invalid or inconsistent");
+            }
+            if (locale_index == 0U) localization_keys.push_back(entry.key);
+        }
+    }
+    if ((plan.localizations.empty() && plan.default_locale_index != 0U) ||
+        (!plan.localizations.empty() && plan.default_locale_index >= plan.localizations.size())) {
+        return localization_invalid("GamePlan default locale is invalid");
+    }
+    std::unordered_set<SymbolId> action_ids{};
+    const auto validate_action_bindings = [&](const ActionPlan& action) noexcept {
+        if (!valid_symbol(action.symbol) || action.key_count > ActionPlan::max_keys ||
+            action.gamepad_button_count > ActionPlan::max_gamepad_buttons ||
+            action.gamepad_axis_count > ActionPlan::max_gamepad_axes) {
+            return false;
+        }
         std::uint32_t key_mask = 0U;
         for (std::uint32_t key_index = 0U; key_index < action.key_count; ++key_index) {
             const auto raw_key = static_cast<std::uint32_t>(action.keys[key_index]);
-            if (raw_key > static_cast<std::uint32_t>(GameKey::tab) || (key_mask & (1U << raw_key)) != 0U) {
-                return invalid("GamePlan action keys are invalid or duplicated");
+            if (raw_key > static_cast<std::uint32_t>(GameKey::left_control) ||
+                (key_mask & (1U << raw_key)) != 0U) {
+                return false;
             }
             key_mask |= 1U << raw_key;
         }
+        std::uint32_t button_mask = 0U;
+        for (std::uint32_t button_index = 0U; button_index < action.gamepad_button_count; ++button_index) {
+            const auto raw_button = static_cast<std::uint32_t>(action.gamepad_buttons[button_index]);
+            if (raw_button > static_cast<std::uint32_t>(GamepadButton::dpad_right) ||
+                (button_mask & (1U << raw_button)) != 0U) {
+                return false;
+            }
+            button_mask |= 1U << raw_button;
+        }
+        std::uint32_t axis_direction_mask = 0U;
+        for (std::uint32_t axis_index = 0U; axis_index < action.gamepad_axis_count; ++axis_index) {
+            const auto& binding = action.gamepad_axes[axis_index];
+            const auto raw_axis = static_cast<std::uint32_t>(binding.axis);
+            if (raw_axis > static_cast<std::uint32_t>(GamepadAxis::right_trigger) ||
+                (binding.direction != -1 && binding.direction != 1) || !std::isfinite(binding.deadzone) ||
+                binding.deadzone <= 0.0F || binding.deadzone > 0.95F) {
+                return false;
+            }
+            const auto bit = raw_axis * 2U + (binding.direction > 0 ? 1U : 0U);
+            if ((axis_direction_mask & (1U << bit)) != 0U) return false;
+            axis_direction_mask |= 1U << bit;
+        }
+        return true;
+    };
+    for (const auto& action : plan.actions) {
+        if (!validate_action_bindings(action) || action.gamepad_button_count != 0U ||
+            action.gamepad_axis_count != 0U) {
+            return invalid("GamePlan contains an invalid action");
+        }
+        if (!action_ids.insert(action.symbol).second) return invalid("GamePlan contains duplicate action ids");
+    }
+    std::unordered_set<SymbolId> profile_ids{};
+    for (const auto& profile : plan.input_profiles) {
+        if (!version_0_6 || !valid_symbol(profile.symbol) || !profile_ids.insert(profile.symbol).second ||
+            profile.actions.size() != plan.actions.size()) {
+            return input_profile_invalid("GamePlan contains an invalid input profile");
+        }
+        for (std::size_t action_index = 0U; action_index < profile.actions.size(); ++action_index) {
+            if (profile.actions[action_index].symbol != plan.actions[action_index].symbol ||
+                !validate_action_bindings(profile.actions[action_index])) {
+                return input_profile_invalid("GamePlan input profile bindings are invalid");
+            }
+        }
+    }
+    if ((version_0_6 && (plan.input_profiles.empty() ||
+                         plan.default_input_profile_index >= plan.input_profiles.size())) ||
+        (!version_0_6 && plan.default_input_profile_index != 0U)) {
+        return input_profile_invalid("GamePlan default input profile is invalid");
     }
     std::unordered_set<SymbolId> state_ids{};
     std::unordered_map<std::string, std::uint32_t> state_names{};
@@ -3865,8 +6088,21 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         if (!state_ids.insert(state.symbol).second) return invalid("GamePlan contains duplicate state ids");
         state_names.emplace(std::string{plan.symbol(state.symbol)}, static_cast<std::uint32_t>(state_index));
     }
+    if ((!version_0_6 && (plan.save.enabled || plan.save.slot_count != 0U || !plan.save.state_indices.empty())) ||
+        (plan.save.enabled && (plan.save.slot_count == 0U || plan.save.slot_count > 16U)) ||
+        (!plan.save.enabled && (plan.save.slot_count != 0U || !plan.save.state_indices.empty()))) {
+        return save_invalid("GamePlan save configuration is invalid");
+    }
+    std::unordered_set<std::uint32_t> save_states{};
+    for (const auto state_index : plan.save.state_indices) {
+        if (state_index >= plan.states.size() || !save_states.insert(state_index).second) {
+            return save_invalid("GamePlan save state list is invalid");
+        }
+    }
     std::unordered_set<SymbolId> scene_ids{};
     std::uint64_t aggregate_contact_pairs = 0U;
+    std::uint64_t aggregate_game_tile_field_cells = 0U;
+    std::uint64_t aggregate_game_particle_slots = 0U;
     for (const auto& scene : plan.scenes) {
         if (!valid_symbol(scene.symbol) || scene.world_capacity == 0U ||
             scene.world_capacity > GameScenePlan::max_world_capacity ||
@@ -3890,9 +6126,27 @@ Result<void> validate_game_plan(const GamePlan& plan) {
             scene.collision_rules.size() > GameScenePlan::max_collision_rules ||
             scene.ui.size() > GameScenePlan::max_ui_elements ||
             scene.rules.size() > GameScenePlan::max_rules ||
+            scene.tile_layers.size() > 64U || scene.fields.size() > 64U ||
+            scene.particle_emitters.size() > 64U || scene.ui_stacks.size() > 128U ||
             (!version_0_3 && (!scene.grids.empty() || !scene.rules.empty())) ||
-            (!version_0_4 && !scene.pools.empty())) {
+            (!version_0_4 && !scene.pools.empty()) ||
+            (!version_0_6 && (!scene.tile_layers.empty() || !scene.fields.empty() ||
+                             !scene.particle_emitters.empty() || !scene.ui_stacks.empty() || scene.persistent))) {
             return invalid("GamePlan contains an invalid scene configuration");
+        }
+        if (version_0_6 &&
+            (static_cast<std::uint32_t>(scene.camera.mode) > static_cast<std::uint32_t>(GameCameraMode::follow) ||
+             !finite_vec2(scene.camera.position) || !finite_vec2(scene.camera.half_extent) ||
+             scene.camera.half_extent.x <= 0.0F || scene.camera.half_extent.y <= 0.0F ||
+             !finite_vec2(scene.camera.follow_offset) ||
+             (scene.camera.mode == GameCameraMode::follow &&
+              (scene.camera.follow_group_index >= scene.spawn_groups.size() ||
+               scene.camera.follow_item_index >=
+                   scene.spawn_groups[scene.camera.follow_group_index].count)) ||
+             (scene.camera.has_bounds &&
+              (!finite_rect(scene.camera.bounds) || scene.camera.bounds.max.x < scene.camera.bounds.min.x ||
+               scene.camera.bounds.max.y < scene.camera.bounds.min.y)))) {
+            return presentation_invalid("GamePlan contains an invalid camera configuration");
         }
         if (version_0_5 &&
             (scene.max_contact_pairs > 100'000U || scene.max_contact_pairs > scene.max_candidate_pairs)) {
@@ -3914,8 +6168,8 @@ Result<void> validate_game_plan(const GamePlan& plan) {
             column_count * row_count > static_cast<double>(GameScenePlan::max_collision_cells)) {
             return invalid("GamePlan collision grid dimensions are unsupported");
         }
-        if (!scene_ids.insert(scene.symbol).second || !path_is_within(plan.content_root, scene.source_path) ||
-            !std::filesystem::is_regular_file(scene.source_path, error) || error) {
+        if (!scene_ids.insert(scene.symbol).second ||
+            !canonical_content_file(plan.content_root, scene.source_path)) {
             return invalid("GamePlan contains a duplicate scene id or invalid scene path");
         }
         std::unordered_set<SymbolId> grid_ids{};
@@ -3927,6 +6181,78 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                 !grid_positions_representable(grid)) {
                 return invalid("GamePlan contains an invalid logical grid");
             }
+        }
+        std::uint64_t aggregate_tile_field_cells = 0U;
+        std::unordered_set<SymbolId> tile_layer_ids{};
+        for (const auto& layer : scene.tile_layers) {
+            if (!version_0_6 || !valid_symbol(layer.symbol) || !tile_layer_ids.insert(layer.symbol).second ||
+                layer.grid_index >= scene.grids.size() || layer.asset_index >= plan.assets.size() ||
+                (plan.assets[layer.asset_index].kind != GameAssetKind::png &&
+                 plan.assets[layer.asset_index].kind != GameAssetKind::font) ||
+                layer.atlas_columns == 0U || layer.atlas_columns > 256U || layer.atlas_rows == 0U ||
+                layer.atlas_rows > 256U ||
+                static_cast<std::uint64_t>(layer.atlas_columns) * layer.atlas_rows >
+                    std::numeric_limits<std::uint16_t>::max() ||
+                layer.initial_cells.size() !=
+                    static_cast<std::size_t>(scene.grids[layer.grid_index].columns) *
+                        scene.grids[layer.grid_index].rows ||
+                !valid_color(layer.tint) || layer.layer < -1'000'000 || layer.layer > 1'000'000) {
+                return tile_field_invalid("GamePlan contains an invalid tile layer");
+            }
+            const auto atlas_count = layer.atlas_columns * layer.atlas_rows;
+            for (const auto value : layer.initial_cells) {
+                if (value > atlas_count) return tile_field_invalid("GamePlan tile value exceeds its atlas");
+            }
+            aggregate_tile_field_cells += layer.initial_cells.size();
+        }
+        std::unordered_set<SymbolId> field_ids{};
+        for (const auto& field : scene.fields) {
+            if (!version_0_6 || !valid_symbol(field.symbol) || !field_ids.insert(field.symbol).second ||
+                field.grid_index >= scene.grids.size() || field.minimum > field.maximum ||
+                field.initial_cells.size() !=
+                    static_cast<std::size_t>(scene.grids[field.grid_index].columns) *
+                        scene.grids[field.grid_index].rows) {
+                return tile_field_invalid("GamePlan contains an invalid integer field");
+            }
+            for (const auto value : field.initial_cells) {
+                if (value < field.minimum || value > field.maximum) {
+                    return tile_field_invalid("GamePlan field value is outside its declared range");
+                }
+            }
+            aggregate_tile_field_cells += field.initial_cells.size();
+        }
+        if (aggregate_tile_field_cells > 4'000'000U) {
+            return tile_field_invalid("GamePlan tile and field cells exceed the scene limit");
+        }
+        aggregate_game_tile_field_cells += aggregate_tile_field_cells;
+        if (aggregate_game_tile_field_cells > GamePlan::max_total_tile_field_cells) {
+            return tile_field_invalid("GamePlan tile and field cells exceed the game-wide limit");
+        }
+        std::uint32_t aggregate_particles = 0U;
+        std::unordered_set<SymbolId> particle_ids{};
+        for (const auto& emitter : scene.particle_emitters) {
+            if (!version_0_6 || !valid_symbol(emitter.symbol) || !particle_ids.insert(emitter.symbol).second ||
+                emitter.capacity == 0U || emitter.capacity > 10'000U ||
+                aggregate_particles > 100'000U - emitter.capacity ||
+                static_cast<std::uint32_t>(emitter.on_exhausted) >
+                    static_cast<std::uint32_t>(GamePoolExhaustionPolicy::recycle_oldest) ||
+                emitter.sprite.asset_index >= plan.assets.size() ||
+                (plan.assets[emitter.sprite.asset_index].kind != GameAssetKind::png &&
+                 plan.assets[emitter.sprite.asset_index].kind != GameAssetKind::font) ||
+                !finite_vec2(emitter.sprite.size) || emitter.sprite.size.x <= 0.0F ||
+                emitter.sprite.size.y <= 0.0F || !finite_vec2(emitter.sprite.pivot) ||
+                !valid_uv(emitter.sprite.uv, true) || !valid_color(emitter.sprite.tint) ||
+                emitter.lifetime_min_ticks == 0U || emitter.lifetime_min_ticks > emitter.lifetime_max_ticks ||
+                emitter.lifetime_max_ticks > 1'000'000U || !finite_vec2(emitter.velocity_min) ||
+                !finite_vec2(emitter.velocity_max) || emitter.velocity_min.x > emitter.velocity_max.x ||
+                emitter.velocity_min.y > emitter.velocity_max.y) {
+                return presentation_invalid("GamePlan contains an invalid particle emitter");
+            }
+            aggregate_particles += emitter.capacity;
+        }
+        aggregate_game_particle_slots += aggregate_particles;
+        if (aggregate_game_particle_slots > GamePlan::max_total_particle_slots) {
+            return presentation_invalid("GamePlan particle slots exceed the game-wide limit");
         }
         std::uint32_t spawn_total = 0U;
         std::uint32_t collider_total = 0U;
@@ -3948,7 +6274,9 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                 spawn.transform.scale.y <= 0.0F || !spawn_positions_representable(spawn) ||
                 (spawn.has_velocity &&
                  (!finite_vec2(spawn.velocity.linear) || !std::isfinite(spawn.velocity.angular))) ||
-                (spawn.has_sprite && spawn.sprite.asset_index >= plan.assets.size()) ||
+                 (spawn.has_sprite && spawn.sprite.asset_index >= plan.assets.size()) ||
+                 (spawn.has_initial_animation &&
+                  (!version_0_6 || spawn.initial_animation_index >= plan.animations.size() || !spawn.has_sprite)) ||
                 (spawn.has_sprite &&
                  (!finite_vec2(spawn.sprite.size) || spawn.sprite.size.x <= 0.0F || spawn.sprite.size.y <= 0.0F ||
                   !finite_vec2(spawn.sprite.pivot) || !valid_uv(spawn.sprite.uv, true) ||
@@ -3968,7 +6296,9 @@ Result<void> validate_game_plan(const GamePlan& plan) {
             }
             spawn_total += spawn.count;
             if (spawn.has_sprite && spawn.sprite.visible) render_submission_count += spawn.count;
-            if (spawn.has_sprite && plan.assets[spawn.sprite.asset_index].kind == GameAssetKind::wav) {
+            if (spawn.has_sprite &&
+                (plan.assets[spawn.sprite.asset_index].kind == GameAssetKind::wav ||
+                 plan.assets[spawn.sprite.asset_index].kind == GameAssetKind::music)) {
                 return invalid("GamePlan sprite references an audio asset");
             }
             if (spawn.has_collider) {
@@ -3983,6 +6313,10 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         }
         if (spawn_total != scene.total_spawn_count || collider_total > scene.max_colliders) {
             return invalid("GamePlan scene count metadata is inconsistent");
+        }
+        render_submission_count += aggregate_particles;
+        for (const auto& layer : scene.tile_layers) {
+            if (layer.visible) render_submission_count += layer.initial_cells.size();
         }
         std::vector<std::int32_t> pool_for_spawn_group(scene.spawn_groups.size(), -1);
         std::unordered_set<SymbolId> pool_ids{};
@@ -4250,8 +6584,9 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                 rule.conditions.size() > GameRulePlan::max_conditions || rule.actions.empty() ||
                 rule.actions.size() > GameRulePlan::max_actions ||
                 static_cast<std::uint32_t>(rule.event.kind) >
-                    static_cast<std::uint32_t>(version_0_5 ? GameRuleEventKind::contact_end
-                                                          : GameRuleEventKind::collision) ||
+                    static_cast<std::uint32_t>(version_0_6 ? GameRuleEventKind::animation_finished
+                                                          : version_0_5 ? GameRuleEventKind::contact_end
+                                                                        : GameRuleEventKind::collision) ||
                 ((rule.event.kind == GameRuleEventKind::action_pressed ||
                   rule.event.kind == GameRuleEventKind::action_released) &&
                  rule.event.action_index >= plan.actions.size()) ||
@@ -4262,6 +6597,10 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                   rule.event.kind == GameRuleEventKind::contact_end) &&
                  rule.event.collision_rule_index >= scene.collision_rules.size())) {
                 return invalid("GamePlan contains an invalid event-action rule");
+            }
+            if (rule.event.kind == GameRuleEventKind::animation_finished &&
+                (!version_0_6 || rule.event.animation_index >= plan.animations.size())) {
+                return animation_invalid("GamePlan animation event references an invalid clip");
             }
             if (rule.event.kind == GameRuleEventKind::collision && version_0_5 &&
                 scene.collision_rules[rule.event.collision_rule_index].interaction !=
@@ -4279,21 +6618,79 @@ Result<void> validate_game_plan(const GamePlan& plan) {
             }
             for (const auto& condition : rule.conditions) {
                 if (static_cast<std::uint32_t>(condition.kind) >
-                        static_cast<std::uint32_t>(GameRuleConditionKind::group_active_count) ||
+                        static_cast<std::uint32_t>(version_0_6 ? GameRuleConditionKind::field_value
+                                                              : GameRuleConditionKind::group_active_count) ||
                     static_cast<std::uint32_t>(condition.comparison) >
                         static_cast<std::uint32_t>(GameComparison::greater_equal) ||
                     (condition.kind == GameRuleConditionKind::int_state &&
                      condition.state_index >= plan.states.size()) ||
                     (condition.kind == GameRuleConditionKind::group_active_count &&
                      (condition.spawn_group_index >= scene.spawn_groups.size() || condition.value < 0 ||
+                       static_cast<std::uint32_t>(condition.value) >
+                           scene.spawn_groups[condition.spawn_group_index].count)) ||
+                    (condition.kind == GameRuleConditionKind::tile_value &&
+                     (condition.tile_layer_index >= scene.tile_layers.size() || condition.value < 0 ||
                       static_cast<std::uint32_t>(condition.value) >
-                          scene.spawn_groups[condition.spawn_group_index].count))) {
+                          scene.tile_layers[condition.tile_layer_index].atlas_columns *
+                              scene.tile_layers[condition.tile_layer_index].atlas_rows)) ||
+                    (condition.kind == GameRuleConditionKind::field_value &&
+                     (condition.field_index >= scene.fields.size() ||
+                      condition.value < scene.fields[condition.field_index].minimum ||
+                      condition.value > scene.fields[condition.field_index].maximum))) {
                     return invalid("GamePlan contains an invalid rule condition");
                 }
             }
             const bool collision_context = rule.event.kind == GameRuleEventKind::collision ||
-                                           rule.event.kind == GameRuleEventKind::contact_begin ||
-                                           rule.event.kind == GameRuleEventKind::contact_end;
+                                            rule.event.kind == GameRuleEventKind::contact_begin ||
+                                            rule.event.kind == GameRuleEventKind::contact_end;
+            const bool event_entity_context = rule.event.kind == GameRuleEventKind::animation_finished;
+            const auto valid_single_target = [&](const GameRuleTargetPlan& target) {
+                if (static_cast<std::uint32_t>(target.kind) >
+                    static_cast<std::uint32_t>(version_0_6 ? GameRuleTargetKind::event_entity
+                                                          : GameRuleTargetKind::collision_b)) {
+                    return false;
+                }
+                if (target.kind == GameRuleTargetKind::spawn_group) return false;
+                if (target.kind == GameRuleTargetKind::spawn_index) {
+                    return target.spawn_group_index < scene.spawn_groups.size() &&
+                           target.item_index < scene.spawn_groups[target.spawn_group_index].count;
+                }
+                if (target.kind == GameRuleTargetKind::collision_a ||
+                    target.kind == GameRuleTargetKind::collision_b) {
+                    return collision_context;
+                }
+                return target.kind == GameRuleTargetKind::event_entity && event_entity_context;
+            };
+            const auto validate_cell_source = [&](const GameCellSourceKind source_kind,
+                                                   const std::uint32_t x,
+                                                   const std::uint32_t y,
+                                                   const GameRuleTargetPlan& target,
+                                                   const std::uint32_t grid_index) {
+                if (grid_index >= scene.grids.size() ||
+                    static_cast<std::uint32_t>(source_kind) >
+                        static_cast<std::uint32_t>(GameCellSourceKind::target)) {
+                    return false;
+                }
+                const auto& grid = scene.grids[grid_index];
+                return source_kind == GameCellSourceKind::constant
+                           ? x < grid.columns && y < grid.rows
+                           : valid_single_target(target);
+            };
+            for (const auto& condition : rule.conditions) {
+                if (condition.kind == GameRuleConditionKind::tile_value) {
+                    const auto grid_index = scene.tile_layers[condition.tile_layer_index].grid_index;
+                    if (!validate_cell_source(condition.cell_source, condition.cell_x, condition.cell_y,
+                                              condition.cell_target, grid_index)) {
+                        return tile_field_invalid("GamePlan tile condition has an invalid cell source");
+                    }
+                } else if (condition.kind == GameRuleConditionKind::field_value) {
+                    const auto grid_index = scene.fields[condition.field_index].grid_index;
+                    if (!validate_cell_source(condition.cell_source, condition.cell_x, condition.cell_y,
+                                              condition.cell_target, grid_index)) {
+                        return tile_field_invalid("GamePlan field condition has an invalid cell source");
+                    }
+                }
+            }
             const auto target_collider_group = [&](const GameRuleTargetPlan& target) {
                 const auto& collision_rule = scene.collision_rules[rule.event.collision_rule_index];
                 return target.kind == GameRuleTargetKind::collision_a ? collision_rule.group_a
@@ -4323,18 +6720,22 @@ Result<void> validate_game_plan(const GamePlan& plan) {
             };
             for (const auto& action : rule.actions) {
                 if (static_cast<std::uint32_t>(action.kind) >
-                    static_cast<std::uint32_t>(version_0_4 ? GameRuleActionKind::reset_pool
-                                                          : GameRuleActionKind::relocate_to_free_cell)) {
+                    static_cast<std::uint32_t>(version_0_6 ? GameRuleActionKind::emit_particles
+                                                          : version_0_4 ? GameRuleActionKind::reset_pool
+                                                                        : GameRuleActionKind::relocate_to_free_cell)) {
                     return invalid("GamePlan contains an invalid rule action kind");
                 }
                 const bool target_action = action.kind == GameRuleActionKind::activate ||
                                            action.kind == GameRuleActionKind::deactivate ||
-                                           action.kind == GameRuleActionKind::set_velocity ||
-                                           action.kind == GameRuleActionKind::relocate_to_free_cell ||
-                                           action.kind == GameRuleActionKind::release_to_pool;
+                                            action.kind == GameRuleActionKind::set_velocity ||
+                                            action.kind == GameRuleActionKind::relocate_to_free_cell ||
+                                            action.kind == GameRuleActionKind::release_to_pool ||
+                                            action.kind == GameRuleActionKind::play_animation ||
+                                            action.kind == GameRuleActionKind::stop_animation;
                 if (target_action &&
-                    (static_cast<std::uint32_t>(action.target.kind) >
-                         static_cast<std::uint32_t>(GameRuleTargetKind::collision_b) ||
+                     (static_cast<std::uint32_t>(action.target.kind) >
+                          static_cast<std::uint32_t>(version_0_6 ? GameRuleTargetKind::event_entity
+                                                                : GameRuleTargetKind::collision_b) ||
                      ((action.target.kind == GameRuleTargetKind::spawn_group ||
                        action.target.kind == GameRuleTargetKind::spawn_index) &&
                       (action.target.spawn_group_index >= scene.spawn_groups.size() ||
@@ -4342,7 +6743,8 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                         action.target.item_index >= scene.spawn_groups[action.target.spawn_group_index].count))) ||
                       ((action.target.kind == GameRuleTargetKind::collision_a ||
                         action.target.kind == GameRuleTargetKind::collision_b) &&
-                       !collision_context))) {
+                        !collision_context) ||
+                       (action.target.kind == GameRuleTargetKind::event_entity && !event_entity_context))) {
                     return action.kind == GameRuleActionKind::release_to_pool
                                ? pool_invalid("GamePlan release_to_pool action target is invalid")
                                : invalid("GamePlan contains an invalid rule action target");
@@ -4383,7 +6785,8 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                     if (!finite_vec2(action.velocity) ||
                         ((action.target.kind == GameRuleTargetKind::spawn_group ||
                           action.target.kind == GameRuleTargetKind::spawn_index) &&
-                         !scene.spawn_groups[action.target.spawn_group_index].has_velocity)) {
+                         !scene.spawn_groups[action.target.spawn_group_index].has_velocity) ||
+                        action.target.kind == GameRuleTargetKind::event_entity) {
                         return invalid("GamePlan set_velocity action is invalid");
                     }
                     if (action.target.kind == GameRuleTargetKind::collision_a ||
@@ -4539,6 +6942,145 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                         return pool_invalid("GamePlan reset_pool action is invalid");
                     }
                     break;
+                case GameRuleActionKind::play_animation:
+                case GameRuleActionKind::stop_animation: {
+                    if (!version_0_6 ||
+                        (action.kind == GameRuleActionKind::play_animation &&
+                         action.animation_index >= plan.animations.size())) {
+                        return animation_invalid("GamePlan animation action is invalid");
+                    }
+                    if ((action.target.kind == GameRuleTargetKind::spawn_group ||
+                         action.target.kind == GameRuleTargetKind::spawn_index) &&
+                        !scene.spawn_groups[action.target.spawn_group_index].has_sprite) {
+                        return animation_invalid("GamePlan animation target lacks Sprite2D");
+                    }
+                    if (action.target.kind == GameRuleTargetKind::collision_a ||
+                        action.target.kind == GameRuleTargetKind::collision_b) {
+                        const auto endpoint = target_collider_group(action.target);
+                        bool found = false;
+                        for (const auto& spawn : scene.spawn_groups) {
+                            if (!spawn.has_collider || spawn.collider.group != endpoint) continue;
+                            found = true;
+                            if (!spawn.has_sprite) {
+                                return animation_invalid("GamePlan animation endpoint lacks Sprite2D");
+                            }
+                        }
+                        if (!found) return animation_invalid("GamePlan animation endpoint is absent");
+                    }
+                    break;
+                }
+                case GameRuleActionKind::set_tile: {
+                    if (!version_0_6 || action.tile_layer_index >= scene.tile_layers.size() ||
+                        action.tile_value > scene.tile_layers[action.tile_layer_index].atlas_columns *
+                                                scene.tile_layers[action.tile_layer_index].atlas_rows ||
+                        !validate_cell_source(
+                            action.cell_source, action.cell_x, action.cell_y, action.cell_target,
+                            scene.tile_layers[action.tile_layer_index].grid_index)) {
+                        return tile_field_invalid("GamePlan set_tile action is invalid");
+                    }
+                    if (action.has_result_state &&
+                        (action.result_state_index >= plan.states.size() ||
+                         plan.states[action.result_state_index].minimum > 0 ||
+                         plan.states[action.result_state_index].maximum < 1)) {
+                        return tile_field_invalid("GamePlan tile result state cannot represent zero and one");
+                    }
+                    break;
+                }
+                case GameRuleActionKind::set_field:
+                case GameRuleActionKind::add_field: {
+                    if (!version_0_6 || action.field_index >= scene.fields.size()) {
+                        return tile_field_invalid("GamePlan field action is invalid");
+                    }
+                    const auto& field = scene.fields[action.field_index];
+                    if ((action.kind == GameRuleActionKind::set_field &&
+                         (action.value < field.minimum || action.value > field.maximum)) ||
+                        !validate_cell_source(
+                            action.cell_source, action.cell_x, action.cell_y, action.cell_target, field.grid_index)) {
+                        return tile_field_invalid("GamePlan field action is invalid");
+                    }
+                    if (action.has_result_state &&
+                        (action.result_state_index >= plan.states.size() ||
+                         plan.states[action.result_state_index].minimum > 0 ||
+                         plan.states[action.result_state_index].maximum < 1)) {
+                        return tile_field_invalid("GamePlan field result state cannot represent zero and one");
+                    }
+                    break;
+                }
+                case GameRuleActionKind::save_slot:
+                case GameRuleActionKind::load_slot:
+                case GameRuleActionKind::delete_slot:
+                    if (!version_0_6 || !plan.save.enabled || action.save_slot >= plan.save.slot_count ||
+                        (action.has_result_state &&
+                         (action.result_state_index >= plan.states.size() ||
+                          plan.states[action.result_state_index].minimum > 0 ||
+                          plan.states[action.result_state_index].maximum < 1))) {
+                        return save_invalid("GamePlan save action is invalid");
+                    }
+                    break;
+                case GameRuleActionKind::camera_shake:
+                    if (!version_0_6 || !std::isfinite(action.scalar) || action.scalar < 0.0F ||
+                        action.scalar > 1'000.0F || action.duration_ticks == 0U ||
+                        action.duration_ticks > 1'000'000U) {
+                        return presentation_invalid("GamePlan camera shake action is invalid");
+                    }
+                    break;
+                case GameRuleActionKind::set_camera_zoom:
+                    if (!version_0_6 || !std::isfinite(action.scalar) || action.scalar < 0.1F ||
+                        action.scalar > 10.0F) {
+                        return presentation_invalid("GamePlan camera zoom action is invalid");
+                    }
+                    break;
+                case GameRuleActionKind::set_locale:
+                    if (!version_0_6 || action.locale_index >= plan.localizations.size()) {
+                        return localization_invalid("GamePlan locale action is invalid");
+                    }
+                    break;
+                case GameRuleActionKind::set_input_profile:
+                    if (!version_0_6 || action.input_profile_index >= plan.input_profiles.size()) {
+                        return input_profile_invalid("GamePlan input profile action is invalid");
+                    }
+                    break;
+                case GameRuleActionKind::play_music:
+                    if (!version_0_6 || action.asset_index >= plan.assets.size() ||
+                        plan.assets[action.asset_index].kind != GameAssetKind::music ||
+                        !std::isfinite(action.scalar) || action.scalar < 0.0F || action.scalar > 1.0F ||
+                        action.fade_ticks > 1'000'000U) {
+                        return presentation_invalid("GamePlan play_music action is invalid");
+                    }
+                    break;
+                case GameRuleActionKind::stop_music:
+                    if (!version_0_6 || action.fade_ticks > 1'000'000U) {
+                        return presentation_invalid("GamePlan stop_music action is invalid");
+                    }
+                    break;
+                case GameRuleActionKind::set_music_volume:
+                    if (!version_0_6 || !std::isfinite(action.scalar) || action.scalar < 0.0F ||
+                        action.scalar > 1.0F || action.fade_ticks > 1'000'000U) {
+                        return presentation_invalid("GamePlan music volume action is invalid");
+                    }
+                    break;
+                case GameRuleActionKind::emit_particles:
+                    if (!version_0_6 || action.particle_emitter_index >= scene.particle_emitters.size() ||
+                        action.particle_count == 0U ||
+                        action.particle_count > scene.particle_emitters[action.particle_emitter_index].capacity ||
+                        static_cast<std::uint32_t>(action.particle_position_kind) >
+                            static_cast<std::uint32_t>(GamePoolSpawnPositionKind::target) ||
+                        action.particle_position_kind == GamePoolSpawnPositionKind::initial ||
+                        !finite_vec2(action.particle_position) || !finite_vec2(action.particle_position_offset) ||
+                        (action.particle_position_kind == GamePoolSpawnPositionKind::target &&
+                         !valid_single_target(action.particle_position_target))) {
+                        return presentation_invalid("GamePlan emit_particles action is invalid");
+                    }
+                    if (action.particle_position_kind == GamePoolSpawnPositionKind::constant) {
+                        const double x = static_cast<double>(action.particle_position.x) +
+                                         action.particle_position_offset.x;
+                        const double y = static_cast<double>(action.particle_position.y) +
+                                         action.particle_position_offset.y;
+                        if (!representable_float(x) || !representable_float(y)) {
+                            return presentation_invalid("GamePlan particle position is not representable");
+                        }
+                    }
+                    break;
                 }
             }
         }
@@ -4553,8 +7095,13 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                 (element.kind != UiElementKind::panel &&
                  (!valid_symbol(element.text) || element.font_asset >= plan.assets.size() ||
                    plan.assets[element.font_asset].kind != GameAssetKind::font)) ||
-                (element.kind == UiElementKind::button && element.action >= plan.actions.size()) ||
-                element.layer < -1'000'000 || element.layer > 1'000'000) {
+                 (element.kind == UiElementKind::button && element.action >= plan.actions.size()) ||
+                 element.layer < -1'000'000 || element.layer > 1'000'000 ||
+                 static_cast<std::uint32_t>(element.anchor) >
+                     static_cast<std::uint32_t>(GameUiAnchor::bottom_right) ||
+                 (element.localized &&
+                  (!version_0_6 || plan.localizations.empty() ||
+                   element.localization_key_index >= plan.localizations.front().entries.size()))) {
                 return invalid("GamePlan contains an invalid UI element");
             }
             if (!ui_ids.insert(element.symbol).second || !std::isfinite(element.text_scale) || element.text_scale <= 0.0F ||
@@ -4565,57 +7112,133 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                 ++render_submission_count;
             }
             if (element.kind != UiElementKind::panel) {
-                const auto text = plan.symbol(element.text);
                 const auto& font = plan.assets[element.font_asset];
-                std::size_t offset = 0U;
-                while (offset < text.size()) {
-                    if (text[offset] == '{') {
-                        const auto close = text.find('}', offset + 1U);
-                        const auto state_name = close == std::string_view::npos
-                                                    ? std::string{}
-                                                    : std::string{text.substr(offset + 1U, close - offset - 1U)};
-                        const auto state = state_names.find(state_name);
-                        if (close == std::string_view::npos || close == offset + 1U || state == state_names.end()) {
-                            return invalid("GamePlan UI contains an invalid state placeholder");
+                const auto validate_text = [&](const std::string_view text, std::size_t& glyph_count) -> Result<void> {
+                    std::size_t offset = 0U;
+                    while (offset < text.size()) {
+                        if (text[offset] == '{') {
+                            const auto close = text.find('}', offset + 1U);
+                            const auto state_name = close == std::string_view::npos
+                                                        ? std::string{}
+                                                        : std::string{text.substr(offset + 1U, close - offset - 1U)};
+                            const auto state = state_names.find(state_name);
+                            if (close == std::string_view::npos || close == offset + 1U ||
+                                state == state_names.end()) {
+                                return invalid("GamePlan UI contains an invalid state placeholder");
+                            }
+                            const auto has_glyph = [&](const std::uint32_t value) {
+                                const auto glyph = std::lower_bound(
+                                    font.glyphs.begin(), font.glyphs.end(), value,
+                                    [](const GlyphPlan& item, const std::uint32_t codepoint) {
+                                        return item.codepoint < codepoint;
+                                    });
+                                return glyph != font.glyphs.end() && glyph->codepoint == value;
+                            };
+                            for (std::uint32_t digit = static_cast<std::uint32_t>('0');
+                                 digit <= static_cast<std::uint32_t>('9'); ++digit) {
+                                if (!has_glyph(digit)) {
+                                    return invalid("GamePlan placeholder font is missing decimal digits");
+                                }
+                            }
+                            if (plan.states[state->second].minimum < 0 &&
+                                !has_glyph(static_cast<std::uint32_t>('-'))) {
+                                return invalid("GamePlan signed placeholder font is missing a minus sign");
+                            }
+                            glyph_count += std::max(
+                                decimal_width(plan.states[state->second].minimum),
+                                decimal_width(plan.states[state->second].maximum));
+                            offset = close + 1U;
+                            continue;
                         }
-                        const auto has_glyph = [&](const std::uint32_t value) {
-                            const auto glyph = std::lower_bound(
-                                font.glyphs.begin(), font.glyphs.end(), value,
-                                [](const GlyphPlan& item, const std::uint32_t codepoint) {
-                                    return item.codepoint < codepoint;
-                                });
-                            return glyph != font.glyphs.end() && glyph->codepoint == value;
-                        };
-                        for (std::uint32_t digit = static_cast<std::uint32_t>('0');
-                             digit <= static_cast<std::uint32_t>('9');
-                             ++digit) {
-                            if (!has_glyph(digit)) return invalid("GamePlan placeholder font is missing decimal digits");
+                        auto codepoint = decode_utf8_codepoint(text, offset, scene.source_path.string(), "/ui");
+                        if (!codepoint) return invalid("GamePlan UI text contains invalid UTF-8");
+                        if (*codepoint == '\n' || *codepoint == '\r') continue;
+                        const auto glyph = std::lower_bound(
+                            font.glyphs.begin(), font.glyphs.end(), *codepoint,
+                            [](const GlyphPlan& item, const std::uint32_t value) { return item.codepoint < value; });
+                        if (glyph == font.glyphs.end() || glyph->codepoint != *codepoint) {
+                            return invalid("GamePlan UI font is missing a glyph");
                         }
-                        if (plan.states[state->second].minimum < 0 &&
-                            !has_glyph(static_cast<std::uint32_t>('-'))) {
-                            return invalid("GamePlan signed placeholder font is missing a minus sign");
-                        }
-                        render_submission_count += std::max(
-                            decimal_width(plan.states[state->second].minimum),
-                            decimal_width(plan.states[state->second].maximum));
-                        offset = close + 1U;
-                        continue;
+                        ++glyph_count;
                     }
-                    auto codepoint = decode_utf8_codepoint(text, offset, scene.source_path.string(), "/ui");
-                    if (!codepoint) return invalid("GamePlan UI text contains invalid UTF-8");
-                    if (*codepoint == '\n' || *codepoint == '\r') continue;
-                    const auto glyph = std::lower_bound(
-                        font.glyphs.begin(), font.glyphs.end(), *codepoint,
-                        [](const GlyphPlan& item, const std::uint32_t value) { return item.codepoint < value; });
-                    if (glyph == font.glyphs.end() || glyph->codepoint != *codepoint) {
-                        return invalid("GamePlan UI font is missing a glyph");
+                    return {};
+                };
+                if (element.localized) {
+                    std::size_t maximum_localized_glyphs = 0U;
+                    for (const auto& locale : plan.localizations) {
+                        const auto entry = locale.entries[element.localization_key_index];
+                        std::size_t localized_glyphs = 0U;
+                        if (auto checked = validate_text(plan.symbol(entry.value), localized_glyphs); !checked) {
+                            return checked;
+                        }
+                        maximum_localized_glyphs = std::max(maximum_localized_glyphs, localized_glyphs);
                     }
-                    ++render_submission_count;
+                    render_submission_count += maximum_localized_glyphs;
+                } else {
+                    std::size_t glyph_count = 0U;
+                    if (auto checked = validate_text(plan.symbol(element.text), glyph_count); !checked) {
+                        return checked;
+                    }
+                    render_submission_count += glyph_count;
                 }
             }
             if (render_submission_count > GamePlan::max_render_submissions) {
                 return invalid("GamePlan scene exceeds the renderer submission capacity");
             }
+        }
+        std::unordered_set<SymbolId> stack_ids{};
+        std::unordered_set<std::uint32_t> stack_children{};
+        for (const auto& stack : scene.ui_stacks) {
+            if (!version_0_6 || !valid_symbol(stack.symbol) || !stack_ids.insert(stack.symbol).second ||
+                static_cast<std::uint32_t>(stack.direction) >
+                    static_cast<std::uint32_t>(GameStackDirection::vertical) ||
+                static_cast<std::uint32_t>(stack.anchor) >
+                    static_cast<std::uint32_t>(GameUiAnchor::bottom_right) ||
+                !finite_vec2(stack.position) || !finite_vec2(stack.size) || stack.size.x <= 0.0F ||
+                stack.size.y <= 0.0F || !finite_vec2(stack.padding) || stack.padding.x < 0.0F ||
+                stack.padding.y < 0.0F || !std::isfinite(stack.spacing) || stack.spacing < 0.0F ||
+                stack.child_indices.empty() || stack.child_indices.size() > 128U) {
+                return presentation_invalid("GamePlan contains an invalid UI stack");
+            }
+            const auto center = anchored_ui_center(
+                stack.anchor, stack.size,
+                static_cast<float>(plan.window.virtual_width),
+                static_cast<float>(plan.window.virtual_height));
+            const Vec2 container_center{center.x + stack.position.x, center.y + stack.position.y};
+            const Vec2 content_min{
+                container_center.x - stack.size.x * 0.5F + stack.padding.x,
+                container_center.y - stack.size.y * 0.5F + stack.padding.y,
+            };
+            const Vec2 content_max{
+                container_center.x + stack.size.x * 0.5F - stack.padding.x,
+                container_center.y + stack.size.y * 0.5F - stack.padding.y,
+            };
+            if (content_min.x > content_max.x || content_min.y > content_max.y) {
+                return presentation_invalid("GamePlan UI stack padding exceeds its content bounds");
+            }
+            for (const auto child : stack.child_indices) {
+                if (child >= scene.ui.size() || !stack_children.insert(child).second) {
+                    return presentation_invalid("GamePlan UI stack child ownership is invalid");
+                }
+                const auto& element = scene.ui[child];
+                const Vec2 child_min{
+                    element.position.x - element.size.x * 0.5F,
+                    element.position.y - element.size.y * 0.5F,
+                };
+                const Vec2 child_max{
+                    element.position.x + element.size.x * 0.5F,
+                    element.position.y + element.size.y * 0.5F,
+                };
+                if (child_min.x < content_min.x - 0.0001F ||
+                    child_min.y < content_min.y - 0.0001F ||
+                    child_max.x > content_max.x + 0.0001F ||
+                    child_max.y > content_max.y + 0.0001F) {
+                    return presentation_invalid("GamePlan UI stack child rectangle exceeds its content bounds");
+                }
+            }
+        }
+        if (render_submission_count > GamePlan::max_render_submissions) {
+            return presentation_invalid("GamePlan scene exceeds the renderer submission capacity");
         }
     }
     for (const auto& transition : plan.transitions) {
@@ -4649,6 +7272,9 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         }
         if (!fps_action_ids.insert(fps.action).second) return invalid("GamePlan contains duplicate FPS actions");
     }
+    if (auto save_capacity = compute_game_save_capacity(plan); !save_capacity) {
+        return std::unexpected(std::move(save_capacity.error()));
+    }
     if (plan.plan_hash == 0U || plan.plan_hash != compute_game_plan_hash(plan)) {
         return invalid("GamePlan hash does not match its contents");
     }
@@ -4678,9 +7304,18 @@ Result<GamePlan> compile_game_file(const std::filesystem::path& manifest_path) {
         *version, source_name, "/schema_version", DiagnosticCode::game_manifest_invalid);
     if (!schema_version) return std::unexpected(std::move(schema_version.error()));
     const bool version_0_3 = *schema_version != GameSchemaVersion::v0_2;
+    const bool version_0_6 = *schema_version == GameSchemaVersion::v0_6;
+    StableHash source_hash{};
+    source_hash.text(*source_text);
     if (auto rejected = reject_unknown(
             *document,
-            version_0_3
+            version_0_6
+                ? std::initializer_list<std::string_view>{
+                      "schema_version", "seed", "name", "organization", "application", "window", "assets",
+                      "animations", "prefabs", "localizations", "default_locale", "actions", "input_profiles",
+                      "default_input_profile", "states", "save", "scenes", "start_scene", "transitions",
+                      "fps_actions"}
+                : version_0_3
                 ? std::initializer_list<std::string_view>{
                       "schema_version", "seed", "name", "organization", "application", "window", "assets",
                       "actions", "states", "scenes", "start_scene", "transitions", "fps_actions"}
@@ -4709,10 +7344,7 @@ Result<GamePlan> compile_game_file(const std::filesystem::path& manifest_path) {
     if (!organization) return std::unexpected(std::move(organization.error()));
     auto application = string_value(*document, "application", source_name, "/");
     if (!application) return std::unexpected(std::move(application.error()));
-    const auto valid_pref_name = [](const std::string_view value) {
-        return value.size() <= 128U && value.find_first_of("/\\:*") == std::string_view::npos;
-    };
-    if (!valid_pref_name(*organization) || !valid_pref_name(*application)) {
+    if (!safe_preference_component(*organization) || !safe_preference_component(*application)) {
         return std::unexpected(game_error(
             DiagnosticCode::game_manifest_invalid, "Organization or application name is unsafe for preferences",
             source_name, "/organization"));
@@ -4762,10 +7394,202 @@ Result<GamePlan> compile_game_file(const std::filesystem::path& manifest_path) {
                 DiagnosticCode::game_manifest_invalid, "Duplicate asset id", source_name,
                 "/assets/" + std::to_string(index) + "/id"));
         }
-        auto asset = parse_asset((**assets)[index], index, root, symbols, source_name);
+        auto asset = parse_asset((**assets)[index], index, root, symbols, source_name, version_0_6);
         if (!asset) return std::unexpected(std::move(asset.error()));
         asset_indices.emplace(std::move(*id), static_cast<std::uint32_t>(plan.assets.size()));
         plan.assets.push_back(std::move(*asset));
+    }
+
+    std::unordered_map<std::string, std::uint32_t> animation_indices{};
+    if (version_0_6) {
+        if (const auto* animations = optional(*document, "animations"); animations != nullptr) {
+            if (!animations->is_array() || animations->size() > GamePlan::max_animations) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_animation_invalid,
+                    "animations must contain at most 512 items", source_name, "/animations"));
+            }
+            plan.animations.reserve(animations->size());
+            for (std::size_t index = 0U; index < animations->size(); ++index) {
+                auto animation = parse_animation(
+                    (*animations)[index], index, asset_indices, plan.assets, symbols, source_name);
+                if (!animation) return std::unexpected(std::move(animation.error()));
+                const auto id = std::string{symbols.view(animation->symbol)};
+                if (!animation_indices.emplace(
+                        id, static_cast<std::uint32_t>(plan.animations.size())).second) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_animation_invalid, "Duplicate animation id", source_name,
+                        "/animations/" + std::to_string(index) + "/id"));
+                }
+                plan.animations.push_back(std::move(*animation));
+            }
+        }
+    }
+
+    std::unordered_map<std::string, std::uint32_t> prefab_indices{};
+    std::vector<PrefabSource> prefab_sources{};
+    if (version_0_6) {
+        if (const auto* prefabs = optional(*document, "prefabs"); prefabs != nullptr) {
+            if (!prefabs->is_array() || prefabs->size() > GamePlan::max_prefabs) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_prefab_invalid,
+                    "prefabs must contain at most 256 items", source_name, "/prefabs"));
+            }
+            plan.prefabs.reserve(prefabs->size());
+            prefab_sources.reserve(prefabs->size());
+            for (std::size_t index = 0U; index < prefabs->size(); ++index) {
+                const auto pointer = "/prefabs/" + std::to_string(index);
+                const auto& declaration = (*prefabs)[index];
+                if (auto rejected = reject_unknown(
+                        declaration, {"id", "path"}, source_name, pointer,
+                        DiagnosticCode::game_prefab_invalid);
+                    !rejected) {
+                    return std::unexpected(std::move(rejected.error()));
+                }
+                auto id = string_value(
+                    declaration, "id", source_name, pointer, DiagnosticCode::game_prefab_invalid);
+                if (!id) return std::unexpected(std::move(id.error()));
+                if (prefab_indices.contains(*id)) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_prefab_invalid, "Duplicate prefab id", source_name,
+                        pointer + "/id"));
+                }
+                auto raw_path = string_value(
+                    declaration, "path", source_name, pointer, DiagnosticCode::game_prefab_invalid);
+                if (!raw_path) return std::unexpected(std::move(raw_path.error()));
+                auto path = resolve_content_path(root, *raw_path, source_name, pointer + "/path");
+                if (!path) return std::unexpected(std::move(path.error()));
+                auto text = read_text_file(
+                    *path, 4U * 1024U * 1024U, DiagnosticCode::game_prefab_invalid);
+                if (!text) return std::unexpected(std::move(text.error()));
+                source_hash.text(*text);
+                auto prefab_document = parse_json(
+                    *text, path->string(), DiagnosticCode::game_prefab_invalid);
+                if (!prefab_document) return std::unexpected(std::move(prefab_document.error()));
+                if (auto rejected = reject_unknown(
+                        *prefab_document,
+                        {"schema_version", "transform", "velocity", "sprite", "collider", "animation"},
+                        path->string(), "/", DiagnosticCode::game_prefab_invalid);
+                    !rejected) {
+                    return std::unexpected(std::move(rejected.error()));
+                }
+                auto prefab_version = string_value(
+                    *prefab_document, "schema_version", path->string(), "/",
+                    DiagnosticCode::game_prefab_invalid);
+                if (!prefab_version) return std::unexpected(std::move(prefab_version.error()));
+                if (*prefab_version != "1") {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_prefab_invalid,
+                        "Unsupported prefab schema version", path->string(), "/schema_version"));
+                }
+                bool has_component = false;
+                Json expanded = {
+                    {"id", *id},
+                    {"count", 1},
+                    {"placement", {
+                        {"kind", "grid"}, {"origin", {0.0, 0.0}},
+                        {"spacing", {1.0, 1.0}}, {"columns", 1}}}
+                };
+                for (const auto field : {"transform", "velocity", "sprite", "collider", "animation"}) {
+                    if (const auto* component = optional(*prefab_document, field); component != nullptr) {
+                        expanded[field] = *component;
+                        has_component = true;
+                    }
+                }
+                if (!has_component) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_prefab_invalid,
+                        "Prefab must declare at least one component", path->string(), "/"));
+                }
+                auto parsed = parse_spawn_group(
+                    expanded, 0U, true, true, true, asset_indices, plan.assets,
+                    animation_indices, plan.animations, symbols, path->string());
+                if (!parsed) return std::unexpected(std::move(parsed.error()));
+                GamePrefabPlan prefab{};
+                prefab.symbol = symbols.intern(*id);
+                prefab.path = *path;
+                prefab.transform = parsed->transform;
+                prefab.velocity = parsed->velocity;
+                prefab.sprite = parsed->sprite;
+                prefab.collider = parsed->collider;
+                prefab.animation_index = parsed->initial_animation_index;
+                prefab.has_transform = optional(*prefab_document, "transform") != nullptr;
+                prefab.has_velocity = parsed->has_velocity;
+                prefab.has_sprite = parsed->has_sprite;
+                prefab.has_collider = parsed->has_collider;
+                prefab.has_animation = parsed->has_initial_animation;
+                prefab.animation_autoplay = parsed->animation_autoplay;
+                prefab_indices.emplace(*id, static_cast<std::uint32_t>(plan.prefabs.size()));
+                prefab_sources.push_back(PrefabSource{*id, *path, std::move(*prefab_document)});
+                plan.prefabs.push_back(std::move(prefab));
+            }
+        }
+    }
+
+    std::unordered_map<std::string, std::uint32_t> locale_indices{};
+    std::unordered_map<std::string, std::uint32_t> localization_key_indices{};
+    if (version_0_6) {
+        if (const auto* localizations = optional(*document, "localizations"); localizations != nullptr) {
+            if (!localizations->is_array() || localizations->empty() ||
+                localizations->size() > GamePlan::max_localizations) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_localization_invalid,
+                    "localizations must contain one to 32 items", source_name, "/localizations"));
+            }
+            plan.localizations.reserve(localizations->size());
+            std::vector<SymbolId> reference_keys{};
+            for (std::size_t index = 0U; index < localizations->size(); ++index) {
+                std::string localization_text{};
+                auto localization = parse_localization(
+                    (*localizations)[index], index, root, symbols, source_name, localization_text);
+                if (!localization) return std::unexpected(std::move(localization.error()));
+                source_hash.text(localization_text);
+                const auto locale = std::string{symbols.view(localization->locale)};
+                if (!locale_indices.emplace(
+                        locale, static_cast<std::uint32_t>(plan.localizations.size())).second) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_localization_invalid, "Duplicate locale", source_name,
+                        "/localizations/" + std::to_string(index) + "/locale"));
+                }
+                if (index == 0U) {
+                    reference_keys.reserve(localization->entries.size());
+                    for (std::size_t key_index = 0U; key_index < localization->entries.size(); ++key_index) {
+                        const auto key = localization->entries[key_index].key;
+                        reference_keys.push_back(key);
+                        localization_key_indices.emplace(
+                            std::string{symbols.view(key)}, static_cast<std::uint32_t>(key_index));
+                    }
+                } else {
+                    if (localization->entries.size() != reference_keys.size()) {
+                        return std::unexpected(game_error(
+                            DiagnosticCode::game_localization_invalid,
+                            "Every locale must contain the same keys", localization->path.string(), "/strings"));
+                    }
+                    for (std::size_t key_index = 0U; key_index < reference_keys.size(); ++key_index) {
+                        if (symbols.view(localization->entries[key_index].key) !=
+                            symbols.view(reference_keys[key_index])) {
+                            return std::unexpected(game_error(
+                                DiagnosticCode::game_localization_invalid,
+                                "Every locale must contain identical ordered keys", localization->path.string(),
+                                "/strings"));
+                        }
+                    }
+                }
+                plan.localizations.push_back(std::move(*localization));
+            }
+            auto default_locale = string_value(
+                *document, "default_locale", source_name, "/",
+                DiagnosticCode::game_localization_invalid);
+            if (!default_locale) return std::unexpected(std::move(default_locale.error()));
+            auto locale_index = index_by_name(
+                locale_indices, *default_locale, "locale", source_name, "/default_locale",
+                DiagnosticCode::game_localization_invalid);
+            if (!locale_index) return std::unexpected(std::move(locale_index.error()));
+            plan.default_locale_index = *locale_index;
+        } else if (optional(*document, "default_locale") != nullptr) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_localization_invalid,
+                "default_locale requires localizations", source_name, "/default_locale"));
+        }
     }
 
     std::unordered_map<std::string, std::uint32_t> action_indices{};
@@ -4791,6 +7615,44 @@ Result<GamePlan> compile_game_file(const std::filesystem::path& manifest_path) {
         plan.actions.push_back(*action);
     }
 
+    std::unordered_map<std::string, std::uint32_t> input_profile_indices{};
+    if (version_0_6) {
+        auto profiles = required(
+            *document, "input_profiles", source_name, "/",
+            DiagnosticCode::game_input_profile_invalid);
+        if (!profiles) return std::unexpected(std::move(profiles.error()));
+        if (!(*profiles)->is_array() || (*profiles)->empty() ||
+            (*profiles)->size() > GamePlan::max_input_profiles) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_input_profile_invalid,
+                "input_profiles must contain one to 16 items", source_name, "/input_profiles"));
+        }
+        plan.input_profiles.reserve((*profiles)->size());
+        for (std::size_t index = 0U; index < (*profiles)->size(); ++index) {
+            auto profile = parse_input_profile(
+                (**profiles)[index], index, action_indices, plan.actions, symbols, source_name);
+            if (!profile) return std::unexpected(std::move(profile.error()));
+            const auto id = std::string{symbols.view(profile->symbol)};
+            if (!input_profile_indices.emplace(
+                    id, static_cast<std::uint32_t>(plan.input_profiles.size())).second) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_input_profile_invalid,
+                    "Duplicate input profile id", source_name,
+                    "/input_profiles/" + std::to_string(index) + "/id"));
+            }
+            plan.input_profiles.push_back(std::move(*profile));
+        }
+        auto default_profile = string_value(
+            *document, "default_input_profile", source_name, "/",
+            DiagnosticCode::game_input_profile_invalid);
+        if (!default_profile) return std::unexpected(std::move(default_profile.error()));
+        auto default_index = index_by_name(
+            input_profile_indices, *default_profile, "input profile", source_name,
+            "/default_input_profile", DiagnosticCode::game_input_profile_invalid);
+        if (!default_index) return std::unexpected(std::move(default_index.error()));
+        plan.default_input_profile_index = *default_index;
+    }
+
     std::unordered_map<std::string, std::uint32_t> state_indices{};
     auto states = required(*document, "states", source_name, "/");
     if (!states) return std::unexpected(std::move(states.error()));
@@ -4813,8 +7675,50 @@ Result<GamePlan> compile_game_file(const std::filesystem::path& manifest_path) {
         plan.states.push_back(*state);
     }
 
-    StableHash source_hash{};
-    source_hash.text(*source_text);
+    if (version_0_6 && optional(*document, "save") != nullptr) {
+        const auto& save = *optional(*document, "save");
+        if (auto rejected = reject_unknown(
+                save, {"slots", "states"}, source_name, "/save", DiagnosticCode::game_save_invalid);
+            !rejected) {
+            return std::unexpected(std::move(rejected.error()));
+        }
+        auto slots = u32_value(
+            save, "slots", 1U, 16U, source_name, "/save", DiagnosticCode::game_save_invalid);
+        if (!slots) return std::unexpected(std::move(slots.error()));
+        auto persistent_states = required(
+            save, "states", source_name, "/save", DiagnosticCode::game_save_invalid);
+        if (!persistent_states) return std::unexpected(std::move(persistent_states.error()));
+        if (!(*persistent_states)->is_array() || (*persistent_states)->size() > plan.states.size()) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_save_invalid,
+                "save states must be a bounded array", source_name, "/save/states"));
+        }
+        plan.save.enabled = true;
+        plan.save.slot_count = *slots;
+        plan.save.state_indices.reserve((*persistent_states)->size());
+        std::unordered_set<std::uint32_t> seen_states{};
+        for (std::size_t index = 0U; index < (*persistent_states)->size(); ++index) {
+            if (!(**persistent_states)[index].is_string()) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_save_invalid,
+                    "save state must be a string", source_name,
+                    "/save/states/" + std::to_string(index)));
+            }
+            const auto& persistent_name = (**persistent_states)[index].get_ref<const std::string&>();
+            auto state_index = index_by_name(
+                state_indices, persistent_name, "integer state", source_name,
+                "/save/states/" + std::to_string(index), DiagnosticCode::game_save_invalid);
+            if (!state_index) return std::unexpected(std::move(state_index.error()));
+            if (!seen_states.insert(*state_index).second) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_save_invalid,
+                    "save states contains a duplicate", source_name,
+                    "/save/states/" + std::to_string(index)));
+            }
+            plan.save.state_indices.push_back(*state_index);
+        }
+    }
+
     std::unordered_map<std::string, std::uint32_t> scene_indices{};
     auto scenes = required(*document, "scenes", source_name, "/");
     if (!scenes) return std::unexpected(std::move(scenes.error()));
@@ -4847,12 +7751,15 @@ Result<GamePlan> compile_game_file(const std::filesystem::path& manifest_path) {
         if (!scene_document) return std::unexpected(std::move(scene_document.error()));
         auto scene = parse_scene(
             *scene_document, *path, *id, plan.schema_version, action_indices, state_indices, plan.states,
-            asset_indices, plan.assets, symbols);
+            asset_indices, plan.assets, animation_indices, plan.animations,
+            prefab_indices, prefab_sources, localization_key_indices, locale_indices,
+            input_profile_indices, plan.save, plan.window, symbols);
         if (!scene) return std::unexpected(std::move(scene.error()));
         scene_indices.emplace(std::move(*id), static_cast<std::uint32_t>(plan.scenes.size()));
         plan.scenes.push_back(std::move(*scene));
     }
-    if (plan.schema_version == GameSchemaVersion::v0_5) {
+    if (plan.schema_version == GameSchemaVersion::v0_5 ||
+        plan.schema_version == GameSchemaVersion::v0_6) {
         std::uint64_t total_contact_pairs = 0U;
         for (const auto& scene : plan.scenes) {
             total_contact_pairs += scene.max_contact_pairs;
@@ -4860,6 +7767,33 @@ Result<GamePlan> compile_game_file(const std::filesystem::path& manifest_path) {
                 return std::unexpected(game_error(
                     DiagnosticCode::game_collision_interaction_invalid,
                     "Game scenes exceed the aggregate one-million contact-pair capacity",
+                    source_name, "/scenes"));
+            }
+        }
+    }
+    if (plan.schema_version == GameSchemaVersion::v0_6) {
+        std::uint64_t total_tile_field_cells = 0U;
+        std::uint64_t total_particle_slots = 0U;
+        for (const auto& scene : plan.scenes) {
+            for (const auto& layer : scene.tile_layers) {
+                total_tile_field_cells += layer.initial_cells.size();
+            }
+            for (const auto& field : scene.fields) {
+                total_tile_field_cells += field.initial_cells.size();
+            }
+            for (const auto& emitter : scene.particle_emitters) {
+                total_particle_slots += emitter.capacity;
+            }
+            if (total_tile_field_cells > GamePlan::max_total_tile_field_cells) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_tile_field_invalid,
+                    "Game scenes exceed the aggregate four-million tile/field-cell capacity",
+                    source_name, "/scenes"));
+            }
+            if (total_particle_slots > GamePlan::max_total_particle_slots) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_presentation_invalid,
+                    "Game scenes exceed the aggregate one-hundred-thousand particle-slot capacity",
                     source_name, "/scenes"));
             }
         }
@@ -5195,7 +8129,7 @@ Result<GameTestScriptPlan> compile_game_test_file(
         const auto pointer = "/assertions/" + std::to_string(index);
         if (auto rejected = reject_unknown(
                 item, {"tick", "kind", "scene", "state", "group", "index", "op", "value", "active",
-                       "expected", "tolerance", "metric"},
+                       "expected", "tolerance", "metric", "layer", "field", "x", "y"},
                 source, pointer, DiagnosticCode::input_invalid); !rejected) {
             return std::unexpected(std::move(rejected.error()));
         }
@@ -5247,7 +8181,7 @@ Result<GameTestScriptPlan> compile_game_test_file(
             assertion.comparison = *comparison;
             assertion.expected_integer = *value;
         } else if (*kind == "group_active_count" || *kind == "entity_active" ||
-                   *kind == "position" || *kind == "velocity") {
+                   *kind == "position" || *kind == "velocity" || *kind == "animation_frame") {
             auto scene = parse_scene();
             if (!scene) return std::unexpected(std::move(scene.error()));
             auto group_name = string_value(item, "group", source, pointer, DiagnosticCode::input_invalid);
@@ -5290,6 +8224,26 @@ Result<GameTestScriptPlan> compile_game_test_file(
                         DiagnosticCode::input_invalid, "entity_active expected value must be boolean", source,
                         pointer + "/active"));
                     assertion.expected_active = (**active).get<bool>();
+                } else if (*kind == "animation_frame") {
+                    if (auto rejected = reject_unknown(
+                            item, {"tick", "kind", "scene", "group", "index", "op", "value"},
+                            source, pointer, DiagnosticCode::input_invalid); !rejected) {
+                        return std::unexpected(std::move(rejected.error()));
+                    }
+                    if (!game_plan.scenes[*scene].spawn_groups[*group].has_sprite) {
+                        return std::unexpected(game_error(
+                            DiagnosticCode::input_invalid,
+                            "Animation assertion target does not have Sprite2D", source, pointer + "/group"));
+                    }
+                    assertion.kind = GameTestAssertionKind::animation_frame;
+                    auto comparison = parse_comparison_value(item, pointer);
+                    if (!comparison) return std::unexpected(std::move(comparison.error()));
+                    auto value = u32_value(
+                        item, "value", 0U, static_cast<std::uint32_t>(GameAnimationPlan::max_frames - 1U),
+                        source, pointer, DiagnosticCode::input_invalid);
+                    if (!value) return std::unexpected(std::move(value.error()));
+                    assertion.comparison = *comparison;
+                    assertion.expected_unsigned = *value;
                 } else {
                     if (auto rejected = reject_unknown(
                             item, {"tick", "kind", "scene", "group", "index", "expected", "tolerance"},
@@ -5319,6 +8273,93 @@ Result<GameTestScriptPlan> compile_game_test_file(
                     assertion.tolerance = *tolerance;
                 }
             }
+        } else if (*kind == "tile_value" || *kind == "field_value") {
+            const bool tile_assertion = *kind == "tile_value";
+            if (auto rejected = reject_unknown(
+                    item, tile_assertion
+                              ? std::initializer_list<std::string_view>{
+                                    "tick", "kind", "scene", "layer", "x", "y", "op", "value"}
+                              : std::initializer_list<std::string_view>{
+                                    "tick", "kind", "scene", "field", "x", "y", "op", "value"},
+                    source, pointer, DiagnosticCode::input_invalid); !rejected) {
+                return std::unexpected(std::move(rejected.error()));
+            }
+            auto scene = parse_scene();
+            if (!scene) return std::unexpected(std::move(scene.error()));
+            assertion.scene_index = *scene;
+            const auto& scene_plan = game_plan.scenes[*scene];
+            std::uint32_t grid_index = 0U;
+            if (tile_assertion) {
+                auto name = string_value(item, "layer", source, pointer, DiagnosticCode::input_invalid);
+                if (!name) return std::unexpected(std::move(name.error()));
+                const auto found = std::find_if(
+                    scene_plan.tile_layers.begin(), scene_plan.tile_layers.end(), [&](const GameTileLayerPlan& layer) {
+                        return game_plan.symbol(layer.symbol) == *name;
+                    });
+                if (found == scene_plan.tile_layers.end()) return std::unexpected(game_error(
+                    DiagnosticCode::input_invalid, "Assertion references an unknown tile layer", source,
+                    pointer + "/layer"));
+                assertion.kind = GameTestAssertionKind::tile_value;
+                assertion.tile_layer_index = static_cast<std::uint32_t>(
+                    std::distance(scene_plan.tile_layers.begin(), found));
+                grid_index = found->grid_index;
+                auto value = u32_value(
+                    item, "value", 0U, found->atlas_columns * found->atlas_rows,
+                    source, pointer, DiagnosticCode::input_invalid);
+                if (!value) return std::unexpected(std::move(value.error()));
+                assertion.expected_unsigned = *value;
+            } else {
+                auto name = string_value(item, "field", source, pointer, DiagnosticCode::input_invalid);
+                if (!name) return std::unexpected(std::move(name.error()));
+                const auto found = std::find_if(
+                    scene_plan.fields.begin(), scene_plan.fields.end(), [&](const GameFieldPlan& field) {
+                        return game_plan.symbol(field.symbol) == *name;
+                    });
+                if (found == scene_plan.fields.end()) return std::unexpected(game_error(
+                    DiagnosticCode::input_invalid, "Assertion references an unknown integer field", source,
+                    pointer + "/field"));
+                assertion.kind = GameTestAssertionKind::field_value;
+                assertion.field_index = static_cast<std::uint32_t>(
+                    std::distance(scene_plan.fields.begin(), found));
+                grid_index = found->grid_index;
+                auto value = i32_value(
+                    item, "value", found->minimum, found->maximum, source, pointer,
+                    DiagnosticCode::input_invalid);
+                if (!value) return std::unexpected(std::move(value.error()));
+                assertion.expected_integer = *value;
+            }
+            const auto& grid = scene_plan.grids[grid_index];
+            auto x = u32_value(item, "x", 0U, grid.columns - 1U, source, pointer, DiagnosticCode::input_invalid);
+            if (!x) return std::unexpected(std::move(x.error()));
+            auto y = u32_value(item, "y", 0U, grid.rows - 1U, source, pointer, DiagnosticCode::input_invalid);
+            if (!y) return std::unexpected(std::move(y.error()));
+            auto comparison = parse_comparison_value(item, pointer);
+            if (!comparison) return std::unexpected(std::move(comparison.error()));
+            assertion.cell_x = *x;
+            assertion.cell_y = *y;
+            assertion.comparison = *comparison;
+        } else if (*kind == "camera_position") {
+            if (auto rejected = reject_unknown(
+                    item, {"tick", "kind", "scene", "expected", "tolerance"}, source, pointer,
+                    DiagnosticCode::input_invalid); !rejected) {
+                return std::unexpected(std::move(rejected.error()));
+            }
+            assertion.kind = GameTestAssertionKind::camera_position;
+            auto scene = parse_scene();
+            if (!scene) return std::unexpected(std::move(scene.error()));
+            auto expected = required(item, "expected", source, pointer, DiagnosticCode::input_invalid);
+            if (!expected) return std::unexpected(std::move(expected.error()));
+            auto vector = vec2(**expected, source, pointer + "/expected", DiagnosticCode::input_invalid);
+            if (!vector) return std::unexpected(std::move(vector.error()));
+            auto tolerance = optional_number(
+                item, "tolerance", 1.0e-5F, source, pointer, DiagnosticCode::input_invalid);
+            if (!tolerance) return std::unexpected(std::move(tolerance.error()));
+            if (*tolerance < 0.0F || *tolerance > 1.0F) return std::unexpected(game_error(
+                DiagnosticCode::input_invalid, "Assertion tolerance must be from zero to one", source,
+                pointer + "/tolerance"));
+            assertion.scene_index = *scene;
+            assertion.expected_vector = *vector;
+            assertion.tolerance = *tolerance;
         } else if (*kind == "runtime_metric") {
             if (auto rejected = reject_unknown(
                     item, {"tick", "kind", "metric", "op", "value"}, source, pointer,
@@ -5358,6 +8399,26 @@ Result<GameTestScriptPlan> compile_game_test_file(
                 {"pool_lifetime_checks", GameTestMetric::pool_lifetime_checks},
                 {"active_pooled_entities", GameTestMetric::active_pooled_entities},
                 {"peak_active_pooled_entities", GameTestMetric::peak_active_pooled_entities},
+                {"animation_frame_updates", GameTestMetric::animation_frame_updates},
+                {"animation_completions", GameTestMetric::animation_completions},
+                {"tile_reads", GameTestMetric::tile_reads},
+                {"tile_writes", GameTestMetric::tile_writes},
+                {"field_reads", GameTestMetric::field_reads},
+                {"field_writes", GameTestMetric::field_writes},
+                {"save_attempts", GameTestMetric::save_attempts},
+                {"save_successes", GameTestMetric::save_successes},
+                {"save_failures", GameTestMetric::save_failures},
+                {"particle_emits", GameTestMetric::particle_emits},
+                {"particle_updates", GameTestMetric::particle_updates},
+                {"particle_exhaustions", GameTestMetric::particle_exhaustions},
+                {"particle_slot_operations", GameTestMetric::particle_slot_operations},
+                {"peak_active_particles", GameTestMetric::peak_active_particles},
+                {"camera_follow_updates", GameTestMetric::camera_follow_updates},
+                {"camera_shake_updates", GameTestMetric::camera_shake_updates},
+                {"music_stream_bytes", GameTestMetric::music_stream_bytes},
+                {"music_underruns", GameTestMetric::music_underruns},
+                {"input_profile_switches", GameTestMetric::input_profile_switches},
+                {"locale_switches", GameTestMetric::locale_switches},
             };
             const auto found = std::find_if(std::begin(metrics), std::end(metrics), [&](const auto& pair) {
                 return pair.first == *metric;
@@ -5423,6 +8484,51 @@ void write_game_summary_json(JsonWriter& writer, const GamePlan& plan) {
     writer.begin_array();
     for (const auto& action : plan.actions) writer.value(plan.symbol(action.symbol));
     writer.end_array();
+    if (plan.schema_version == GameSchemaVersion::v0_6) {
+        writer.key("animations");
+        writer.begin_array();
+        for (const auto& animation : plan.animations) {
+            writer.begin_object();
+            writer.key("id");
+            writer.value(plan.symbol(animation.symbol));
+            writer.key("texture");
+            writer.value(plan.symbol(plan.assets[animation.asset_index].symbol));
+            writer.key("mode");
+            writer.value(to_string(animation.mode));
+            writer.key("frames");
+            writer.value(static_cast<std::uint64_t>(animation.frames.size()));
+            writer.end_object();
+        }
+        writer.end_array();
+        writer.key("prefabs");
+        writer.begin_array();
+        for (const auto& prefab : plan.prefabs) writer.value(plan.symbol(prefab.symbol));
+        writer.end_array();
+        writer.key("locales");
+        writer.begin_array();
+        for (const auto& locale : plan.localizations) writer.value(plan.symbol(locale.locale));
+        writer.end_array();
+        writer.key("default_locale");
+        if (plan.localizations.empty()) writer.null_value();
+        else writer.value(plan.symbol(plan.localizations[plan.default_locale_index].locale));
+        writer.key("input_profiles");
+        writer.begin_array();
+        for (const auto& profile : plan.input_profiles) writer.value(plan.symbol(profile.symbol));
+        writer.end_array();
+        writer.key("default_input_profile");
+        writer.value(plan.symbol(plan.input_profiles[plan.default_input_profile_index].symbol));
+        writer.key("save");
+        writer.begin_object();
+        writer.key("enabled");
+        writer.value(plan.save.enabled);
+        writer.key("slots");
+        writer.value(static_cast<std::uint64_t>(plan.save.slot_count));
+        writer.key("state_count");
+        writer.value(static_cast<std::uint64_t>(plan.save.state_indices.size()));
+        writer.key("capacity_bytes");
+        writer.value(compute_game_save_capacity(plan).value_or(0U));
+        writer.end_object();
+    }
     writer.key("states");
     writer.begin_array();
     for (const auto& state : plan.states) {
@@ -5446,6 +8552,20 @@ void write_game_summary_json(JsonWriter& writer, const GamePlan& plan) {
         writer.value(static_cast<std::uint64_t>(scene.total_spawn_count));
         writer.key("max_contact_pairs");
         writer.value(static_cast<std::uint64_t>(scene.max_contact_pairs));
+        if (plan.schema_version == GameSchemaVersion::v0_6) {
+            writer.key("persistent");
+            writer.value(scene.persistent);
+            writer.key("camera_mode");
+            writer.value(scene.camera.mode == GameCameraMode::follow ? "follow" : "fixed");
+            writer.key("tile_layers");
+            writer.value(static_cast<std::uint64_t>(scene.tile_layers.size()));
+            writer.key("fields");
+            writer.value(static_cast<std::uint64_t>(scene.fields.size()));
+            writer.key("particle_emitters");
+            writer.value(static_cast<std::uint64_t>(scene.particle_emitters.size()));
+            writer.key("ui_stacks");
+            writer.value(static_cast<std::uint64_t>(scene.ui_stacks.size()));
+        }
         writer.key("systems");
         writer.begin_array();
         for (const auto& system : scene.systems) writer.value(to_string(system.operation));
@@ -5554,6 +8674,8 @@ void write_game_summary_json(JsonWriter& writer, const GamePlan& plan) {
         add_dependency(asset.path);
         if (!asset.metadata_path.empty()) add_dependency(asset.metadata_path);
     }
+    for (const auto& prefab : plan.prefabs) add_dependency(prefab.path);
+    for (const auto& locale : plan.localizations) add_dependency(locale.path);
     std::sort(dependencies.begin(), dependencies.end());
     dependencies.erase(std::unique(dependencies.begin(), dependencies.end()), dependencies.end());
     writer.key("dependencies");

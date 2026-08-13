@@ -1,0 +1,18 @@
+{
+  "schema_version": "1",
+  "frames": 6,
+  "events": [
+    {"tick": 0, "action": "burst", "kind": "tap"},
+    {"tick": 1, "action": "save", "kind": "tap"},
+    {"tick": 2, "action": "burst", "kind": "tap"},
+    {"tick": 3, "action": "load", "kind": "tap"}
+  ],
+  "assertions": [
+    {"tick": 0, "kind": "int_state", "state": "score", "op": "eq", "value": 1},
+    {"tick": 1, "kind": "int_state", "state": "save_result", "op": "eq", "value": 1},
+    {"tick": 2, "kind": "int_state", "state": "score", "op": "eq", "value": 2},
+    {"tick": 3, "kind": "int_state", "state": "score", "op": "eq", "value": 1},
+    {"tick": 3, "kind": "int_state", "state": "save_result", "op": "eq", "value": 1},
+    {"tick": 3, "kind": "runtime_metric", "metric": "save_successes", "op": "eq", "value": 2}
+  ]
+}

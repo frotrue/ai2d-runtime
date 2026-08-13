@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -17,6 +18,56 @@
 #include <vector>
 
 namespace {
+
+struct TemporaryDirectory final {
+    std::filesystem::path path{};
+
+    TemporaryDirectory() = default;
+    explicit TemporaryDirectory(std::filesystem::path value) : path(std::move(value)) {}
+    TemporaryDirectory(const TemporaryDirectory&) = delete;
+    TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
+    TemporaryDirectory(TemporaryDirectory&& other) noexcept : path(std::move(other.path)) {
+        other.path.clear();
+    }
+    TemporaryDirectory& operator=(TemporaryDirectory&& other) noexcept {
+        if (this == &other) return *this;
+        std::error_code ignored{};
+        if (!path.empty()) std::filesystem::remove_all(path, ignored);
+        path = std::move(other.path);
+        other.path.clear();
+        return *this;
+    }
+    ~TemporaryDirectory() {
+        std::error_code ignored{};
+        if (!path.empty()) std::filesystem::remove_all(path, ignored);
+    }
+};
+
+ai2d::Result<TemporaryDirectory> make_verify_save_directory() {
+    std::error_code error{};
+    const auto root = std::filesystem::temp_directory_path(error);
+    if (error) {
+        return std::unexpected(ai2d::Diagnostic::make(
+            ai2d::DiagnosticCode::internal_error, ai2d::Severity::error,
+            "game_verify", "Temporary directory is unavailable for isolated save verification"));
+    }
+    const auto stamp = static_cast<std::uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    for (std::uint32_t attempt = 0U; attempt < 128U; ++attempt) {
+        const auto candidate = root /
+            ("ai2d-game-verify-" + std::to_string(stamp) + "-" + std::to_string(attempt));
+        error.clear();
+        if (std::filesystem::create_directory(candidate, error)) {
+            return TemporaryDirectory{candidate};
+        }
+        if (error) break;
+    }
+    auto diagnostic = ai2d::Diagnostic::make(
+        ai2d::DiagnosticCode::internal_error, ai2d::Severity::error,
+        "game_verify", "Isolated save directory could not be created");
+    if (error) diagnostic.context.push_back({"filesystem_error", error.message()});
+    return std::unexpected(std::move(diagnostic));
+}
 
 struct RunArguments final {
     std::uint32_t frames{0U};
@@ -63,6 +114,28 @@ struct AggregateRuleMetrics final {
     std::uint32_t peak_contact_pairs{0U};
     std::uint32_t active_pooled_entities{0U};
     std::uint32_t peak_active_pooled_entities{0U};
+    std::uint64_t animation_frame_updates{0U};
+    std::uint64_t animation_completions{0U};
+    std::uint64_t tile_reads{0U};
+    std::uint64_t tile_writes{0U};
+    std::uint64_t field_reads{0U};
+    std::uint64_t field_writes{0U};
+    std::uint64_t save_attempts{0U};
+    std::uint64_t save_successes{0U};
+    std::uint64_t save_failures{0U};
+    std::uint64_t save_bytes{0U};
+    std::uint64_t particle_emits{0U};
+    std::uint64_t particle_updates{0U};
+    std::uint64_t particle_exhaustions{0U};
+    std::uint64_t particle_slot_operations{0U};
+    std::uint32_t peak_active_particles{0U};
+    std::uint64_t camera_follow_updates{0U};
+    std::uint64_t camera_shake_updates{0U};
+    std::uint64_t music_stream_bytes{0U};
+    std::uint64_t music_underruns{0U};
+    std::uint64_t input_profile_switches{0U};
+    std::uint64_t locale_switches{0U};
+    std::uint64_t localized_text_resolutions{0U};
 
     void add(const ai2d::GameRuntimeFrameMetrics& frame) noexcept {
         rule_executions += frame.rule_executions;
@@ -95,6 +168,28 @@ struct AggregateRuleMetrics final {
         active_pooled_entities = frame.active_pooled_entities;
         peak_active_pooled_entities = std::max(
             peak_active_pooled_entities, frame.peak_active_pooled_entities);
+        animation_frame_updates += frame.animation_frame_updates;
+        animation_completions += frame.animation_completions;
+        tile_reads += frame.tile_reads;
+        tile_writes += frame.tile_writes;
+        field_reads += frame.field_reads;
+        field_writes += frame.field_writes;
+        save_attempts += frame.save_attempts;
+        save_successes += frame.save_successes;
+        save_failures += frame.save_failures;
+        save_bytes += frame.save_bytes;
+        particle_emits += frame.particle_emits;
+        particle_updates += frame.particle_updates;
+        particle_exhaustions += frame.particle_exhaustions;
+        particle_slot_operations += frame.particle_slot_operations;
+        peak_active_particles = std::max(peak_active_particles, frame.peak_active_particles);
+        camera_follow_updates += frame.camera_follow_updates;
+        camera_shake_updates += frame.camera_shake_updates;
+        music_stream_bytes += frame.music_stream_bytes;
+        music_underruns += frame.music_underruns;
+        input_profile_switches += frame.input_profile_switches;
+        locale_switches += frame.locale_switches;
+        localized_text_resolutions += frame.localized_text_resolutions;
     }
 
     friend bool operator==(const AggregateRuleMetrics&, const AggregateRuleMetrics&) = default;
@@ -509,6 +604,50 @@ int run_game(const int argument_count, const char* const* arguments) {
     writer.value(static_cast<std::uint64_t>(last_frame.active_pooled_entities));
     writer.key("peak_active_pooled_entities");
     writer.value(static_cast<std::uint64_t>(aggregate.peak_active_pooled_entities));
+    writer.key("animation_frame_updates");
+    writer.value(aggregate.animation_frame_updates);
+    writer.key("animation_completions");
+    writer.value(aggregate.animation_completions);
+    writer.key("tile_reads");
+    writer.value(aggregate.tile_reads);
+    writer.key("tile_writes");
+    writer.value(aggregate.tile_writes);
+    writer.key("field_reads");
+    writer.value(aggregate.field_reads);
+    writer.key("field_writes");
+    writer.value(aggregate.field_writes);
+    writer.key("save_attempts");
+    writer.value(aggregate.save_attempts);
+    writer.key("save_successes");
+    writer.value(aggregate.save_successes);
+    writer.key("save_failures");
+    writer.value(aggregate.save_failures);
+    writer.key("save_bytes");
+    writer.value(aggregate.save_bytes);
+    writer.key("particle_emits");
+    writer.value(aggregate.particle_emits);
+    writer.key("particle_updates");
+    writer.value(aggregate.particle_updates);
+    writer.key("particle_exhaustions");
+    writer.value(aggregate.particle_exhaustions);
+    writer.key("particle_slot_operations");
+    writer.value(aggregate.particle_slot_operations);
+    writer.key("peak_active_particles");
+    writer.value(static_cast<std::uint64_t>(aggregate.peak_active_particles));
+    writer.key("camera_follow_updates");
+    writer.value(aggregate.camera_follow_updates);
+    writer.key("camera_shake_updates");
+    writer.value(aggregate.camera_shake_updates);
+    writer.key("music_stream_bytes");
+    writer.value(aggregate.music_stream_bytes);
+    writer.key("music_underruns");
+    writer.value(aggregate.music_underruns);
+    writer.key("input_profile_switches");
+    writer.value(aggregate.input_profile_switches);
+    writer.key("locale_switches");
+    writer.value(aggregate.locale_switches);
+    writer.key("localized_text_resolutions");
+    writer.value(aggregate.localized_text_resolutions);
     writer.key("last_frame");
     writer.begin_object();
     writer.key("fixed_ticks");
@@ -608,6 +747,26 @@ std::uint64_t metric_value(
     case ai2d::GameTestMetric::pool_lifetime_checks: return metrics.pool_lifetime_checks;
     case ai2d::GameTestMetric::active_pooled_entities: return metrics.active_pooled_entities;
     case ai2d::GameTestMetric::peak_active_pooled_entities: return metrics.peak_active_pooled_entities;
+    case ai2d::GameTestMetric::animation_frame_updates: return metrics.animation_frame_updates;
+    case ai2d::GameTestMetric::animation_completions: return metrics.animation_completions;
+    case ai2d::GameTestMetric::tile_reads: return metrics.tile_reads;
+    case ai2d::GameTestMetric::tile_writes: return metrics.tile_writes;
+    case ai2d::GameTestMetric::field_reads: return metrics.field_reads;
+    case ai2d::GameTestMetric::field_writes: return metrics.field_writes;
+    case ai2d::GameTestMetric::save_attempts: return metrics.save_attempts;
+    case ai2d::GameTestMetric::save_successes: return metrics.save_successes;
+    case ai2d::GameTestMetric::save_failures: return metrics.save_failures;
+    case ai2d::GameTestMetric::particle_emits: return metrics.particle_emits;
+    case ai2d::GameTestMetric::particle_updates: return metrics.particle_updates;
+    case ai2d::GameTestMetric::particle_exhaustions: return metrics.particle_exhaustions;
+    case ai2d::GameTestMetric::particle_slot_operations: return metrics.particle_slot_operations;
+    case ai2d::GameTestMetric::peak_active_particles: return metrics.peak_active_particles;
+    case ai2d::GameTestMetric::camera_follow_updates: return metrics.camera_follow_updates;
+    case ai2d::GameTestMetric::camera_shake_updates: return metrics.camera_shake_updates;
+    case ai2d::GameTestMetric::music_stream_bytes: return metrics.music_stream_bytes;
+    case ai2d::GameTestMetric::music_underruns: return metrics.music_underruns;
+    case ai2d::GameTestMetric::input_profile_switches: return metrics.input_profile_switches;
+    case ai2d::GameTestMetric::locale_switches: return metrics.locale_switches;
     }
     return 0U;
 }
@@ -668,6 +827,41 @@ ai2d::Result<AssertionObservation> evaluate_assertion(
         passed = comparison_matches(
             observation.unsigned_value, assertion.expected_unsigned, assertion.comparison);
         break;
+    case ai2d::GameTestAssertionKind::animation_frame: {
+        if (runtime.current_scene_index() != assertion.scene_index) break;
+        auto value = runtime.animation_frame(assertion.spawn_group_index, assertion.item_index);
+        if (!value) return std::unexpected(std::move(value.error()));
+        observation.unsigned_value = *value;
+        passed = comparison_matches(
+            observation.unsigned_value, assertion.expected_unsigned, assertion.comparison);
+        break;
+    }
+    case ai2d::GameTestAssertionKind::tile_value: {
+        if (runtime.current_scene_index() != assertion.scene_index) break;
+        auto value = runtime.tile_value(assertion.tile_layer_index, assertion.cell_x, assertion.cell_y);
+        if (!value) return std::unexpected(std::move(value.error()));
+        observation.unsigned_value = *value;
+        passed = comparison_matches(
+            observation.unsigned_value, assertion.expected_unsigned, assertion.comparison);
+        break;
+    }
+    case ai2d::GameTestAssertionKind::field_value: {
+        if (runtime.current_scene_index() != assertion.scene_index) break;
+        auto value = runtime.field_value(assertion.field_index, assertion.cell_x, assertion.cell_y);
+        if (!value) return std::unexpected(std::move(value.error()));
+        observation.signed_value = *value;
+        passed = comparison_matches(
+            observation.signed_value, assertion.expected_integer, assertion.comparison);
+        break;
+    }
+    case ai2d::GameTestAssertionKind::camera_position: {
+        if (runtime.current_scene_index() != assertion.scene_index) break;
+        const auto value = runtime.camera_position();
+        observation.vector_value = value;
+        passed = std::abs(value.x - assertion.expected_vector.x) <= assertion.tolerance &&
+                 std::abs(value.y - assertion.expected_vector.y) <= assertion.tolerance;
+        break;
+    }
     }
     if (passed) return observation;
     auto diagnostic = ai2d::Diagnostic::make(
@@ -681,18 +875,22 @@ ai2d::Result<AssertionObservation> evaluate_assertion(
     if (assertion.kind == ai2d::GameTestAssertionKind::current_scene) {
         diagnostic.context.push_back({"actual", observation.scene});
         diagnostic.context.push_back({"expected", std::string{plan.symbol(plan.scenes[assertion.scene_index].symbol)}});
-    } else if (assertion.kind == ai2d::GameTestAssertionKind::int_state) {
+    } else if (assertion.kind == ai2d::GameTestAssertionKind::int_state ||
+               assertion.kind == ai2d::GameTestAssertionKind::field_value) {
         diagnostic.context.push_back({"actual", observation.signed_value});
         diagnostic.context.push_back({"expected", assertion.expected_integer});
     } else if (assertion.kind == ai2d::GameTestAssertionKind::runtime_metric ||
-               assertion.kind == ai2d::GameTestAssertionKind::group_active_count) {
+               assertion.kind == ai2d::GameTestAssertionKind::group_active_count ||
+               assertion.kind == ai2d::GameTestAssertionKind::animation_frame ||
+               assertion.kind == ai2d::GameTestAssertionKind::tile_value) {
         diagnostic.context.push_back({"actual", observation.unsigned_value});
         diagnostic.context.push_back({"expected", assertion.expected_unsigned});
     } else if (assertion.kind == ai2d::GameTestAssertionKind::entity_active) {
         diagnostic.context.push_back({"actual", observation.bool_value});
         diagnostic.context.push_back({"expected", assertion.expected_active});
     } else if (assertion.kind == ai2d::GameTestAssertionKind::position ||
-               assertion.kind == ai2d::GameTestAssertionKind::velocity) {
+               assertion.kind == ai2d::GameTestAssertionKind::velocity ||
+               assertion.kind == ai2d::GameTestAssertionKind::camera_position) {
         diagnostic.context.push_back({"actual_x", static_cast<double>(observation.vector_value.x)});
         diagnostic.context.push_back({"actual_y", static_cast<double>(observation.vector_value.y)});
         diagnostic.context.push_back({"expected_x", static_cast<double>(assertion.expected_vector.x)});
@@ -715,6 +913,12 @@ int verify_game(const int argument_count, const char* const* arguments) {
     if (!plan) return emit_failure("verify", std::move(plan.error()), options.json);
     auto script = ai2d::compile_game_test_file(options.test_script, *plan);
     if (!script) return emit_failure("verify", std::move(script.error()), options.json);
+    TemporaryDirectory isolated_saves{};
+    if (plan->save.enabled) {
+        auto created = make_verify_save_directory();
+        if (!created) return emit_failure("verify", std::move(created.error()), options.json);
+        isolated_saves = std::move(*created);
+    }
     std::vector<AssertionObservation> observations{};
     observations.reserve(script->assertions.size());
     VerifyResult baseline{};
@@ -727,6 +931,10 @@ int verify_game(const int argument_count, const char* const* arguments) {
         runtime_options.hidden = options.hidden;
         runtime_options.enable_audio = false;
         runtime_options.load_saved_settings = false;
+        if (!isolated_saves.path.empty()) {
+            runtime_options.save_directory_override =
+                isolated_saves.path / ("repeat-" + std::to_string(repeat));
+        }
         auto loaded = runtime.initialize(*plan, runtime_options);
         if (!loaded) return emit_failure("verify", std::move(loaded.error()), options.json);
         std::vector<ai2d::GameActionInput> actions(plan->actions.size());
@@ -840,6 +1048,42 @@ int verify_game(const int argument_count, const char* const* arguments) {
     writer.value(baseline.metrics.trigger_narrowphase_tests);
     writer.key("linear_motion_updates");
     writer.value(baseline.metrics.linear_motion_updates);
+    writer.key("animation_frame_updates");
+    writer.value(baseline.metrics.animation_frame_updates);
+    writer.key("animation_completions");
+    writer.value(baseline.metrics.animation_completions);
+    writer.key("tile_reads");
+    writer.value(baseline.metrics.tile_reads);
+    writer.key("tile_writes");
+    writer.value(baseline.metrics.tile_writes);
+    writer.key("field_reads");
+    writer.value(baseline.metrics.field_reads);
+    writer.key("field_writes");
+    writer.value(baseline.metrics.field_writes);
+    writer.key("save_attempts");
+    writer.value(baseline.metrics.save_attempts);
+    writer.key("save_successes");
+    writer.value(baseline.metrics.save_successes);
+    writer.key("save_failures");
+    writer.value(baseline.metrics.save_failures);
+    writer.key("save_bytes");
+    writer.value(baseline.metrics.save_bytes);
+    writer.key("particle_emits");
+    writer.value(baseline.metrics.particle_emits);
+    writer.key("particle_updates");
+    writer.value(baseline.metrics.particle_updates);
+    writer.key("particle_slot_operations");
+    writer.value(baseline.metrics.particle_slot_operations);
+    writer.key("camera_follow_updates");
+    writer.value(baseline.metrics.camera_follow_updates);
+    writer.key("camera_shake_updates");
+    writer.value(baseline.metrics.camera_shake_updates);
+    writer.key("input_profile_switches");
+    writer.value(baseline.metrics.input_profile_switches);
+    writer.key("locale_switches");
+    writer.value(baseline.metrics.locale_switches);
+    writer.key("localized_text_resolutions");
+    writer.value(baseline.metrics.localized_text_resolutions);
     writer.key("assertions");
     writer.begin_array();
     for (const auto& observation : observations) {
@@ -851,12 +1095,14 @@ int verify_game(const int argument_count, const char* const* arguments) {
         writer.key("actual");
         if (observation.kind == ai2d::GameTestAssertionKind::current_scene) {
             writer.value(observation.scene);
-        } else if (observation.kind == ai2d::GameTestAssertionKind::int_state) {
+        } else if (observation.kind == ai2d::GameTestAssertionKind::int_state ||
+                   observation.kind == ai2d::GameTestAssertionKind::field_value) {
             writer.value(observation.signed_value);
         } else if (observation.kind == ai2d::GameTestAssertionKind::entity_active) {
             writer.value(observation.bool_value);
         } else if (observation.kind == ai2d::GameTestAssertionKind::position ||
-                   observation.kind == ai2d::GameTestAssertionKind::velocity) {
+                   observation.kind == ai2d::GameTestAssertionKind::velocity ||
+                   observation.kind == ai2d::GameTestAssertionKind::camera_position) {
             writer.begin_array();
             writer.value(static_cast<double>(observation.vector_value.x));
             writer.value(static_cast<double>(observation.vector_value.y));

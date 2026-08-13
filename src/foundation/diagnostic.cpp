@@ -52,6 +52,13 @@ std::string_view to_string(const DiagnosticCode code) noexcept {
     case DiagnosticCode::game_scene_invalid: return "GAME_SCENE_INVALID";
     case DiagnosticCode::game_pool_invalid: return "GAME_POOL_INVALID";
     case DiagnosticCode::game_collision_interaction_invalid: return "GAME_COLLISION_INTERACTION_INVALID";
+    case DiagnosticCode::game_animation_invalid: return "GAME_ANIMATION_INVALID";
+    case DiagnosticCode::game_prefab_invalid: return "GAME_PREFAB_INVALID";
+    case DiagnosticCode::game_save_invalid: return "GAME_SAVE_INVALID";
+    case DiagnosticCode::game_tile_field_invalid: return "GAME_TILE_FIELD_INVALID";
+    case DiagnosticCode::game_input_profile_invalid: return "GAME_INPUT_PROFILE_INVALID";
+    case DiagnosticCode::game_localization_invalid: return "GAME_LOCALIZATION_INVALID";
+    case DiagnosticCode::game_presentation_invalid: return "GAME_PRESENTATION_INVALID";
     case DiagnosticCode::game_test_assertion_failed: return "GAME_TEST_ASSERTION_FAILED";
     case DiagnosticCode::game_test_nondeterministic: return "GAME_TEST_NONDETERMINISTIC";
     case DiagnosticCode::game_transition_invalid: return "GAME_TRANSITION_INVALID";
@@ -65,6 +72,9 @@ std::string_view to_string(const DiagnosticCode code) noexcept {
     case DiagnosticCode::runtime_numeric_state_invalid: return "RUNTIME_NUMERIC_STATE_INVALID";
     case DiagnosticCode::runtime_pool_state_invalid: return "RUNTIME_POOL_STATE_INVALID";
     case DiagnosticCode::runtime_contact_state_invalid: return "RUNTIME_CONTACT_STATE_INVALID";
+    case DiagnosticCode::runtime_animation_state_invalid: return "RUNTIME_ANIMATION_STATE_INVALID";
+    case DiagnosticCode::runtime_save_state_invalid: return "RUNTIME_SAVE_STATE_INVALID";
+    case DiagnosticCode::runtime_tile_field_state_invalid: return "RUNTIME_TILE_FIELD_STATE_INVALID";
     case DiagnosticCode::runtime_fixed_step_overrun: return "RUNTIME_FIXED_STEP_OVERRUN";
     case DiagnosticCode::collision_grid_capacity_exceeded: return "COLLISION_GRID_CAPACITY_EXCEEDED";
     case DiagnosticCode::collision_candidate_capacity_exceeded: return "COLLISION_CANDIDATE_CAPACITY_EXCEEDED";

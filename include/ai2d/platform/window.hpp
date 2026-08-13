@@ -12,7 +12,15 @@ struct WindowExtent final {
     std::uint32_t height{0U};
 };
 
-enum class InputKey : std::uint8_t { escape, left, right, up, down, a, d, space, enter, tab, count };
+enum class InputKey : std::uint8_t {
+    escape, left, right, up, down, a, d, w, s, q, e, r, f, left_shift, left_control,
+    space, enter, tab, count
+};
+enum class InputGamepadButton : std::uint8_t {
+    south, east, west, north, back, start, left_stick, right_stick,
+    left_shoulder, right_shoulder, dpad_up, dpad_down, dpad_left, dpad_right, count
+};
+enum class InputGamepadAxis : std::uint8_t { left_x, left_y, right_x, right_y, left_trigger, right_trigger, count };
 
 struct InputSnapshot final {
     bool quit_requested{false};
@@ -27,6 +35,11 @@ struct InputSnapshot final {
     bool keys[static_cast<std::uint8_t>(InputKey::count)]{};
     bool pressed_keys[static_cast<std::uint8_t>(InputKey::count)]{};
     bool released_keys[static_cast<std::uint8_t>(InputKey::count)]{};
+    bool gamepad_buttons[static_cast<std::uint8_t>(InputGamepadButton::count)]{};
+    bool pressed_gamepad_buttons[static_cast<std::uint8_t>(InputGamepadButton::count)]{};
+    bool released_gamepad_buttons[static_cast<std::uint8_t>(InputGamepadButton::count)]{};
+    float gamepad_axes[static_cast<std::uint8_t>(InputGamepadAxis::count)]{};
+    bool gamepad_connected{false};
     WindowExtent drawable_extent{};
 
     [[nodiscard]] bool down(InputKey key) const noexcept {
@@ -37,6 +50,18 @@ struct InputSnapshot final {
     }
     [[nodiscard]] bool released(InputKey key) const noexcept {
         return released_keys[static_cast<std::uint8_t>(key)];
+    }
+    [[nodiscard]] bool down(InputGamepadButton button) const noexcept {
+        return gamepad_buttons[static_cast<std::uint8_t>(button)];
+    }
+    [[nodiscard]] bool pressed(InputGamepadButton button) const noexcept {
+        return pressed_gamepad_buttons[static_cast<std::uint8_t>(button)];
+    }
+    [[nodiscard]] bool released(InputGamepadButton button) const noexcept {
+        return released_gamepad_buttons[static_cast<std::uint8_t>(button)];
+    }
+    [[nodiscard]] float axis(InputGamepadAxis input_axis) const noexcept {
+        return gamepad_axes[static_cast<std::uint8_t>(input_axis)];
     }
 };
 
