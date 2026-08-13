@@ -1,0 +1,13 @@
+{
+  "schema_version":"1","frames":250,
+  "events":[{"tick":120,"action":"fire_mid","kind":"tap"},{"tick":150,"action":"fire_low","kind":"tap"},{"tick":180,"action":"fire_high","kind":"tap"}],
+  "assertions":[
+    {"tick":119,"kind":"runtime_metric","metric":"pool_recycled_slots","op":"ge","value":1},
+    {"tick":120,"kind":"position","scene":"play","group":"bullet_slots","index":0,"expected":[-9.8,0],"tolerance":0.0001},
+    {"tick":121,"kind":"position","scene":"play","group":"bullet_slots","index":0,"expected":[-9.6,0],"tolerance":0.0001},
+    {"tick":170,"kind":"entity_active","scene":"play","group":"item_slots","index":0,"active":true},
+    {"tick":220,"kind":"runtime_metric","metric":"contact_begins","op":"ge","value":3},
+    {"tick":220,"kind":"runtime_metric","metric":"pool_exhaustions","op":"ge","value":2},
+    {"tick":249,"kind":"runtime_metric","metric":"linear_motion_updates","op":"gt","value":500}
+  ]
+}

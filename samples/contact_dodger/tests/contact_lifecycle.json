@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "frames": 300,
+  "events": [
+    {"tick": 0, "action": "fire", "kind": "tap"},
+    {"tick": 1, "action": "fire", "kind": "tap"},
+    {"tick": 70, "action": "fire", "kind": "tap"},
+    {"tick": 71, "action": "fire", "kind": "tap"},
+    {"tick": 140, "action": "surge", "kind": "tap"}
+  ],
+  "assertions": [
+    {"tick": 0, "kind": "current_scene", "scene": "play"},
+    {"tick": 0, "kind": "position", "scene": "play", "group": "bullet_slots", "index": 0, "expected": [-9.0, 0], "tolerance": 0.0001},
+    {"tick": 1, "kind": "position", "scene": "play", "group": "bullet_slots", "index": 0, "expected": [-8.8, 0], "tolerance": 0.0001},
+    {"tick": 1, "kind": "runtime_metric", "metric": "pool_exhaustions", "op": "ge", "value": 1},
+    {"tick": 46, "kind": "entity_active", "scene": "play", "group": "effect_slots", "index": 0, "active": true},
+    {"tick": 46, "kind": "position", "scene": "play", "group": "effect_slots", "index": 0, "expected": [0.925, 0], "tolerance": 0.0001},
+    {"tick": 69, "kind": "int_state", "state": "score", "op": "ge", "value": 2},
+    {"tick": 69, "kind": "runtime_metric", "metric": "pool_releases", "op": "ge", "value": 2},
+    {"tick": 70, "kind": "entity_active", "scene": "play", "group": "bullet_slots", "index": 0, "active": true},
+    {"tick": 71, "kind": "runtime_metric", "metric": "pool_exhaustions", "op": "ge", "value": 2},
+    {"tick": 139, "kind": "int_state", "state": "score", "op": "ge", "value": 4},
+    {"tick": 139, "kind": "int_state", "state": "win", "op": "eq", "value": 1},
+    {"tick": 140, "kind": "runtime_metric", "metric": "pool_recycled_slots", "op": "ge", "value": 1},
+    {"tick": 140, "kind": "group_active_count", "scene": "play", "group": "enemy_slots", "op": "eq", "value": 2},
+    {"tick": 230, "kind": "int_state", "state": "gate_entries", "op": "ge", "value": 2},
+    {"tick": 230, "kind": "int_state", "state": "gate_ends", "op": "ge", "value": 1},
+    {"tick": 230, "kind": "runtime_metric", "metric": "contact_begins", "op": "ge", "value": 4},
+    {"tick": 230, "kind": "runtime_metric", "metric": "contact_ends", "op": "ge", "value": 1},
+    {"tick": 299, "kind": "runtime_metric", "metric": "pool_acquire_successes", "op": "ge", "value": 8},
+    {"tick": 299, "kind": "runtime_metric", "metric": "pool_expirations", "op": "ge", "value": 2},
+    {"tick": 299, "kind": "runtime_metric", "metric": "linear_motion_updates", "op": "gt", "value": 0},
+    {"tick": 299, "kind": "runtime_metric", "metric": "trigger_narrowphase_tests", "op": "gt", "value": 0}
+  ]
+}

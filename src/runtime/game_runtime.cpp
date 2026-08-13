@@ -171,6 +171,9 @@ public:
         bool has_sprite{false};
         bool has_collider{false};
         bool initial_active{true};
+        bool pooled{false};
+        std::uint32_t pool_index{0U};
+        std::uint32_t pool_slot_index{0U};
     };
 
     struct GroupRange final {
@@ -185,7 +188,29 @@ public:
         bool stepped{false};
     };
 
+    struct PoolRuntimeState final {
+        static constexpr std::uint32_t invalid_slot = std::numeric_limits<std::uint32_t>::max();
+        static constexpr std::uint64_t no_expiration = std::numeric_limits<std::uint64_t>::max();
+
+        std::vector<std::uint32_t> free_ring{};
+        std::vector<std::uint32_t> active_next{};
+        std::vector<std::uint32_t> active_previous{};
+        std::vector<std::uint64_t> expiration_ticks{};
+        std::vector<std::uint8_t> acquired{};
+        std::uint32_t free_head{0U};
+        std::uint32_t free_count{0U};
+        std::uint32_t active_head{invalid_slot};
+        std::uint32_t active_tail{invalid_slot};
+        std::uint32_t active_count{0U};
+    };
+
     struct SceneSnapshot final {
+        struct Contact final {
+            std::uint32_t rule_index{0U};
+            std::uint32_t entity_a_index{0U};
+            std::uint32_t entity_b_index{0U};
+        };
+
         std::vector<Transform2D> transforms{};
         std::vector<Velocity2D> velocities{};
         std::vector<Sprite2D> sprites{};
@@ -193,6 +218,8 @@ public:
         std::vector<EntityState2D> entity_states{};
         std::vector<SystemState> system_states{};
         std::vector<std::uint64_t> rule_invocations{};
+        std::vector<PoolRuntimeState> pool_states{};
+        std::vector<Contact> contacts{};
         std::uint64_t scene_tick{0U};
         std::uint32_t focused_button{0U};
         bool retained{false};
@@ -210,11 +237,14 @@ public:
     std::unique_ptr<World> world{};
     std::unique_ptr<CollisionGrid2D> collision{};
     std::vector<EntityRecord> entities{};
+    std::vector<std::uint64_t> entity_lifecycle_epochs{};
+    std::vector<std::uint64_t> collision_event_epoch_snapshot{};
     std::vector<GroupRange> group_ranges{};
     std::vector<CollisionRule2D> collision_rules{};
     std::vector<SystemState> system_states{};
     std::vector<std::uint64_t> rule_invocations{};
     std::vector<std::uint64_t> rule_random_keys{};
+    std::vector<PoolRuntimeState> pool_states{};
     std::vector<std::uint32_t> scene_enter_rules{};
     std::vector<std::uint32_t> pre_tick_rules{};
     std::vector<std::vector<std::uint32_t>> collision_rule_dispatch{};
@@ -232,6 +262,8 @@ public:
     std::uint64_t frame_index{0U};
     std::uint64_t simulation_tick{0U};
     std::uint64_t scene_tick{0U};
+    std::uint32_t active_pooled_entities{0U};
+    std::uint32_t peak_active_pooled_entities{0U};
     RenderFpsCap requested_fps{RenderFpsCap::fps_60};
     RenderFpsCap effective_fps{RenderFpsCap::fps_60};
     float master_volume{1.0F};
@@ -319,6 +351,54 @@ public:
         }
         snapshot.system_states = system_states;
         snapshot.rule_invocations = rule_invocations;
+        if (snapshot.pool_states.size() != pool_states.size()) {
+            return std::unexpected(pool_state_error("Active scene pool snapshot storage is inconsistent"));
+        }
+        for (std::size_t pool_index = 0U; pool_index < pool_states.size(); ++pool_index) {
+            const auto& source = pool_states[pool_index];
+            auto& destination = snapshot.pool_states[pool_index];
+            if (source.free_ring.size() != destination.free_ring.size() ||
+                source.active_next.size() != destination.active_next.size() ||
+                source.active_previous.size() != destination.active_previous.size() ||
+                source.expiration_ticks.size() != destination.expiration_ticks.size() ||
+                source.acquired.size() != destination.acquired.size()) {
+                return std::unexpected(pool_state_error("Active scene pool snapshot capacity is inconsistent"));
+            }
+            std::copy(source.free_ring.begin(), source.free_ring.end(), destination.free_ring.begin());
+            std::copy(source.active_next.begin(), source.active_next.end(), destination.active_next.begin());
+            std::copy(
+                source.active_previous.begin(), source.active_previous.end(), destination.active_previous.begin());
+            std::copy(
+                source.expiration_ticks.begin(), source.expiration_ticks.end(),
+                destination.expiration_ticks.begin());
+            std::copy(source.acquired.begin(), source.acquired.end(), destination.acquired.begin());
+            destination.free_head = source.free_head;
+            destination.free_count = source.free_count;
+            destination.active_head = source.active_head;
+            destination.active_tail = source.active_tail;
+            destination.active_count = source.active_count;
+        }
+        snapshot.contacts.clear();
+        for (const auto& pair : collision->active_contact_pairs()) {
+            const auto find_local_index = [&](const EntityId entity) -> std::uint32_t {
+                const auto found = std::find_if(
+                    entities.begin(), entities.end(), [&](const EntityRecord& record) {
+                        return record.entity == entity;
+                    });
+                return found == entities.end()
+                           ? std::numeric_limits<std::uint32_t>::max()
+                           : static_cast<std::uint32_t>(std::distance(entities.begin(), found));
+            };
+            const auto a = find_local_index(pair.entity_a);
+            const auto b = find_local_index(pair.entity_b);
+            if (a >= entities.size() || b >= entities.size() ||
+                snapshot.contacts.size() >= snapshot.contacts.capacity()) {
+                return std::unexpected(runtime_error(
+                    DiagnosticCode::runtime_contact_state_invalid,
+                    "Active contact state cannot be represented by the retained scene snapshot"));
+            }
+            snapshot.contacts.push_back({pair.rule_index, a, b});
+        }
         snapshot.scene_tick = scene_tick;
         snapshot.focused_button = focused_button;
         snapshot.retained = true;
@@ -329,6 +409,12 @@ public:
         auto* state = world->entity_state(record.entity);
         if (state == nullptr) return;
         if (state->active != active && metrics != nullptr) ++metrics->active_state_changes;
+        if (state->active && !active) {
+            if (record.entity.index < entity_lifecycle_epochs.size()) {
+                ++entity_lifecycle_epochs[record.entity.index];
+            }
+            if (collision != nullptr) collision->discard_contacts_for(record.entity);
+        }
         state->active = active;
         if (record.has_collider) {
             if (auto* collider_component = world->collider(record.entity); collider_component != nullptr) {
@@ -340,6 +426,230 @@ public:
                 sprite->visible = active && record.initial_sprite.visible;
             }
         }
+    }
+
+    [[nodiscard]] Diagnostic pool_state_error(const char* const message) const {
+        return runtime_error(DiagnosticCode::runtime_pool_state_invalid, message);
+    }
+
+    void initialize_pool_storage(
+        PoolRuntimeState& state,
+        const std::uint32_t capacity,
+        const std::uint32_t initially_active) {
+        state.free_ring.resize(capacity);
+        state.active_next.assign(capacity, PoolRuntimeState::invalid_slot);
+        state.active_previous.assign(capacity, PoolRuntimeState::invalid_slot);
+        state.expiration_ticks.assign(capacity, PoolRuntimeState::no_expiration);
+        state.acquired.assign(capacity, std::uint8_t{0U});
+        state.free_head = 0U;
+        state.free_count = 0U;
+        state.active_head = PoolRuntimeState::invalid_slot;
+        state.active_tail = PoolRuntimeState::invalid_slot;
+        state.active_count = 0U;
+        for (std::uint32_t slot = 0U; slot < initially_active; ++slot) {
+            state.acquired[slot] = 1U;
+            state.active_previous[slot] = state.active_tail;
+            if (state.active_tail != PoolRuntimeState::invalid_slot) {
+                state.active_next[state.active_tail] = slot;
+            } else {
+                state.active_head = slot;
+            }
+            state.active_tail = slot;
+            ++state.active_count;
+        }
+        for (std::uint32_t slot = initially_active; slot < capacity; ++slot) {
+            state.free_ring[state.free_count++] = slot;
+        }
+    }
+
+    [[nodiscard]] bool pool_storage_valid(
+        const std::uint32_t pool_index,
+        const PoolRuntimeState& state) const noexcept {
+        if (pool_index >= plan.scenes[active_scene].pools.size()) return false;
+        const auto group_index = plan.scenes[active_scene].pools[pool_index].spawn_group_index;
+        if (group_index >= group_ranges.size()) return false;
+        const auto capacity = group_ranges[group_index].count;
+        return capacity != 0U && state.free_ring.size() == capacity &&
+               state.active_next.size() == capacity && state.active_previous.size() == capacity &&
+               state.expiration_ticks.size() == capacity && state.acquired.size() == capacity &&
+               state.free_count <= capacity && state.active_count <= capacity &&
+               state.free_count + state.active_count == capacity &&
+               (state.free_count == 0U || state.free_head < capacity) &&
+               (state.active_head == PoolRuntimeState::invalid_slot || state.active_head < capacity) &&
+               (state.active_tail == PoolRuntimeState::invalid_slot || state.active_tail < capacity);
+    }
+
+    [[nodiscard]] EntityRecord& pool_record(const std::uint32_t pool_index, const std::uint32_t slot) {
+        const auto group_index = plan.scenes[active_scene].pools[pool_index].spawn_group_index;
+        return entities[group_ranges[group_index].begin + slot];
+    }
+
+    Result<void> restore_record_components(EntityRecord& record) {
+        auto* transform = world->transform(record.entity);
+        if (transform == nullptr) {
+            return std::unexpected(pool_state_error("Pooled entity is missing Transform2D"));
+        }
+        *transform = record.initial_transform;
+        if (record.has_velocity) {
+            auto* velocity = world->velocity(record.entity);
+            if (velocity == nullptr) {
+                return std::unexpected(pool_state_error("Pooled entity is missing Velocity2D"));
+            }
+            *velocity = record.initial_velocity;
+        }
+        if (record.has_sprite) {
+            auto* sprite = world->sprite(record.entity);
+            if (sprite == nullptr) {
+                return std::unexpected(pool_state_error("Pooled entity is missing Sprite2D"));
+            }
+            *sprite = record.initial_sprite;
+        }
+        if (record.has_collider) {
+            auto* collider_component = world->collider(record.entity);
+            if (collider_component == nullptr) {
+                return std::unexpected(pool_state_error("Pooled entity is missing Collider2D"));
+            }
+            *collider_component = record.initial_collider;
+        }
+        return {};
+    }
+
+    Result<void> detach_active_slot(PoolRuntimeState& state, const std::uint32_t slot) {
+        if (slot >= state.acquired.size() || state.acquired[slot] == 0U || state.active_count == 0U) {
+            return std::unexpected(pool_state_error("Pool active list contains an invalid slot"));
+        }
+        const auto previous = state.active_previous[slot];
+        const auto next = state.active_next[slot];
+        if ((previous != PoolRuntimeState::invalid_slot && previous >= state.acquired.size()) ||
+            (next != PoolRuntimeState::invalid_slot && next >= state.acquired.size())) {
+            return std::unexpected(pool_state_error("Pool active list link is out of range"));
+        }
+        if (previous == PoolRuntimeState::invalid_slot) state.active_head = next;
+        else state.active_next[previous] = next;
+        if (next == PoolRuntimeState::invalid_slot) state.active_tail = previous;
+        else state.active_previous[next] = previous;
+        state.active_previous[slot] = PoolRuntimeState::invalid_slot;
+        state.active_next[slot] = PoolRuntimeState::invalid_slot;
+        state.expiration_ticks[slot] = PoolRuntimeState::no_expiration;
+        state.acquired[slot] = 0U;
+        --state.active_count;
+        return {};
+    }
+
+    Result<void> append_active_slot(
+        PoolRuntimeState& state,
+        const std::uint32_t slot,
+        const std::uint64_t expiration_tick) {
+        if (slot >= state.acquired.size() || state.acquired[slot] != 0U ||
+            (state.active_tail != PoolRuntimeState::invalid_slot &&
+             state.active_tail >= state.acquired.size())) {
+            return std::unexpected(pool_state_error("Pool acquisition would corrupt the active list"));
+        }
+        state.acquired[slot] = 1U;
+        state.active_previous[slot] = state.active_tail;
+        state.active_next[slot] = PoolRuntimeState::invalid_slot;
+        if (state.active_tail == PoolRuntimeState::invalid_slot) state.active_head = slot;
+        else state.active_next[state.active_tail] = slot;
+        state.active_tail = slot;
+        state.expiration_ticks[slot] = expiration_tick;
+        ++state.active_count;
+        return {};
+    }
+
+    Result<void> append_free_slot(PoolRuntimeState& state, const std::uint32_t slot) {
+        const auto capacity = static_cast<std::uint32_t>(state.free_ring.size());
+        if (capacity == 0U || state.free_count >= capacity || state.free_head >= capacity) {
+            return std::unexpected(pool_state_error("Pool available-slot FIFO is full or invalid"));
+        }
+        state.free_ring[(state.free_head + state.free_count) % capacity] = slot;
+        ++state.free_count;
+        return {};
+    }
+
+    Result<std::uint32_t> pop_free_slot(PoolRuntimeState& state) {
+        const auto capacity = static_cast<std::uint32_t>(state.free_ring.size());
+        if (capacity == 0U || state.free_count == 0U || state.free_head >= capacity) {
+            return std::unexpected(pool_state_error("Pool available-slot FIFO is empty or invalid"));
+        }
+        const auto slot = state.free_ring[state.free_head];
+        if (slot >= capacity || state.acquired[slot] != 0U) {
+            return std::unexpected(pool_state_error("Pool available-slot FIFO references an acquired slot"));
+        }
+        state.free_head = (state.free_head + 1U) % capacity;
+        --state.free_count;
+        return slot;
+    }
+
+    Result<EntityRecord*> resolve_single_target(
+        const GameRuleTargetPlan& target,
+        const CollisionEvent2D* const collision_event) {
+        EntityRecord* resolved = nullptr;
+        if (auto result = for_each_target(target, collision_event, [&](EntityRecord& record) -> Result<void> {
+                if (resolved != nullptr) {
+                    return std::unexpected(pool_state_error("Pool action target resolved to multiple entities"));
+                }
+                resolved = &record;
+                return {};
+            });
+            !result) {
+            return std::unexpected(std::move(result.error()));
+        }
+        if (resolved == nullptr) {
+            return std::unexpected(pool_state_error("Pool action target did not resolve to an entity"));
+        }
+        return resolved;
+    }
+
+    Result<void> release_pool_slot(
+        const std::uint32_t pool_index,
+        const std::uint32_t slot,
+        GameRuntimeFrameMetrics& metrics,
+        const bool expiration) {
+        if (pool_index >= pool_states.size()) {
+            return std::unexpected(pool_state_error("Pool release references an invalid pool"));
+        }
+        auto& state = pool_states[pool_index];
+        if (!pool_storage_valid(pool_index, state) || slot >= state.acquired.size()) {
+            return std::unexpected(pool_state_error("Pool release found invalid runtime storage"));
+        }
+        if (state.acquired[slot] == 0U) return {};
+        if (auto detached = detach_active_slot(state, slot); !detached) return detached;
+        if (auto appended = append_free_slot(state, slot); !appended) return appended;
+        set_entity_active(pool_record(pool_index, slot), false, &metrics);
+        if (active_pooled_entities == 0U) {
+            return std::unexpected(pool_state_error("Pool active entity count underflowed"));
+        }
+        --active_pooled_entities;
+        if (expiration) ++metrics.pool_expirations;
+        else ++metrics.pool_releases;
+        return {};
+    }
+
+    Result<void> reset_pool(const std::uint32_t pool_index, GameRuntimeFrameMetrics* const metrics) {
+        if (pool_index >= pool_states.size()) {
+            return std::unexpected(pool_state_error("Pool reset references an invalid pool"));
+        }
+        const auto& pool = plan.scenes[active_scene].pools[pool_index];
+        const auto& group = plan.scenes[active_scene].spawn_groups[pool.spawn_group_index];
+        auto& state = pool_states[pool_index];
+        if (!pool_storage_valid(pool_index, state)) {
+            return std::unexpected(pool_state_error("Pool reset found invalid runtime storage"));
+        }
+        const auto previous_active = state.active_count;
+        for (std::uint32_t slot = 0U; slot < group.count; ++slot) {
+            auto& record = pool_record(pool_index, slot);
+            collision->discard_contacts_for(record.entity);
+            if (auto restored = restore_record_components(record); !restored) return restored;
+            set_entity_active(record, slot < group.active_count, metrics);
+        }
+        initialize_pool_storage(state, group.count, group.active_count);
+        if (active_pooled_entities < previous_active) {
+            return std::unexpected(pool_state_error("Pool reset active entity count underflowed"));
+        }
+        active_pooled_entities = active_pooled_entities - previous_active + group.active_count;
+        peak_active_pooled_entities = std::max(peak_active_pooled_entities, active_pooled_entities);
+        if (metrics != nullptr) ++metrics->pool_resets;
+        return {};
     }
 
     [[nodiscard]] std::uint32_t group_active_count(const std::uint32_t group_index) const noexcept {
@@ -433,6 +743,7 @@ public:
                 scene.max_colliders,
                 scene.max_grid_references,
                 scene.max_candidate_pairs,
+                scene.max_contact_pairs,
                 scene.max_impacts,
             });
             !initialized) {
@@ -440,8 +751,14 @@ public:
         }
         std::vector<EntityRecord> next_entities{};
         next_entities.reserve(scene.total_spawn_count);
+        std::vector<std::uint64_t> next_entity_lifecycle_epochs(scene.total_spawn_count, 0U);
+        std::vector<std::uint64_t> next_collision_event_epoch_snapshot(scene.total_spawn_count, 0U);
         std::vector<GroupRange> next_group_ranges{};
         next_group_ranges.reserve(scene.spawn_groups.size());
+        std::vector<std::int32_t> next_pool_for_group(scene.spawn_groups.size(), -1);
+        for (std::size_t pool_index = 0U; pool_index < scene.pools.size(); ++pool_index) {
+            next_pool_for_group[scene.pools[pool_index].spawn_group_index] = static_cast<std::int32_t>(pool_index);
+        }
         for (std::uint32_t group_index = 0U; group_index < scene.spawn_groups.size(); ++group_index) {
             const auto& group = scene.spawn_groups[group_index];
             next_group_ranges.push_back({static_cast<std::uint32_t>(next_entities.size()), group.count});
@@ -513,6 +830,11 @@ public:
                     record.has_collider = true;
                 }
                 record.initial_active = item < group.active_count;
+                if (next_pool_for_group[group_index] >= 0) {
+                    record.pooled = true;
+                    record.pool_index = static_cast<std::uint32_t>(next_pool_for_group[group_index]);
+                    record.pool_slot_index = item;
+                }
                 if (auto added = next_world->add(*entity, EntityState2D{record.initial_active}); !added) {
                     return std::unexpected(std::move(added.error()));
                 }
@@ -525,6 +847,11 @@ public:
             CollisionRule2D rule{};
             rule.group_a = source_rule.group_a;
             rule.group_b = source_rule.group_b;
+            rule.interaction = source_rule.interaction == GameCollisionInteraction::solid
+                                   ? CollisionInteraction2D::solid
+                               : source_rule.interaction == GameCollisionInteraction::trigger
+                                   ? CollisionInteraction2D::trigger
+                                   : CollisionInteraction2D::legacy;
             rule.reaction_count = static_cast<std::uint32_t>(source_rule.reactions.size());
             for (std::size_t index = 0U; index < source_rule.reactions.size(); ++index) {
                 const auto& source_reaction = source_rule.reactions[index];
@@ -546,6 +873,13 @@ public:
             }
         }
         std::vector<std::uint64_t> next_rule_invocations(scene.rules.size(), 0U);
+        std::vector<PoolRuntimeState> next_pool_states(scene.pools.size());
+        for (std::size_t pool_index = 0U; pool_index < scene.pools.size(); ++pool_index) {
+            const auto group_index = scene.pools[pool_index].spawn_group_index;
+            initialize_pool_storage(
+                next_pool_states[pool_index], scene.spawn_groups[group_index].count,
+                scene.spawn_groups[group_index].active_count);
+        }
         std::vector<std::uint64_t> next_rule_random_keys{};
         next_rule_random_keys.reserve(scene.rules.size());
         for (const auto& rule : scene.rules) {
@@ -560,7 +894,9 @@ public:
             const auto& rule = scene.rules[rule_index];
             if (rule.event.kind == GameRuleEventKind::scene_enter) {
                 next_scene_enter_rules.push_back(rule_index);
-            } else if (rule.event.kind == GameRuleEventKind::collision) {
+            } else if (rule.event.kind == GameRuleEventKind::collision ||
+                       rule.event.kind == GameRuleEventKind::contact_begin ||
+                       rule.event.kind == GameRuleEventKind::contact_end) {
                 next_collision_dispatch[rule.event.collision_rule_index].push_back(rule_index);
             } else {
                 next_pre_tick_rules.push_back(rule_index);
@@ -589,21 +925,50 @@ public:
             }
             next_system_states = snapshot.system_states;
             next_rule_invocations = snapshot.rule_invocations;
+            if (snapshot.pool_states.size() != next_pool_states.size()) {
+                return std::unexpected(pool_state_error("Retained pool snapshot does not match its scene plan"));
+            }
+            next_pool_states = snapshot.pool_states;
             next_scene_tick = snapshot.scene_tick;
+            std::vector<CollisionContactPair2D> restored_contacts{};
+            restored_contacts.reserve(snapshot.contacts.size());
+            for (const auto& contact : snapshot.contacts) {
+                if (contact.rule_index >= scene.collision_rules.size() ||
+                    contact.entity_a_index >= next_entities.size() ||
+                    contact.entity_b_index >= next_entities.size()) {
+                    return std::unexpected(runtime_error(
+                        DiagnosticCode::runtime_contact_state_invalid,
+                        "Retained contact snapshot contains an invalid local reference"));
+                }
+                restored_contacts.push_back({
+                    contact.rule_index,
+                    next_entities[contact.entity_a_index].entity,
+                    next_entities[contact.entity_b_index].entity,
+                });
+            }
+            if (auto restored = next_collision->restore_contact_pairs(restored_contacts); !restored) {
+                return std::unexpected(std::move(restored.error()));
+            }
         }
         world = std::move(next_world);
         collision = std::move(next_collision);
         entities = std::move(next_entities);
+        entity_lifecycle_epochs = std::move(next_entity_lifecycle_epochs);
+        collision_event_epoch_snapshot = std::move(next_collision_event_epoch_snapshot);
         group_ranges = std::move(next_group_ranges);
         collision_rules = std::move(next_rules);
         system_states = std::move(next_system_states);
         rule_invocations = std::move(next_rule_invocations);
+        pool_states = std::move(next_pool_states);
         rule_random_keys = std::move(next_rule_random_keys);
         scene_enter_rules = std::move(next_scene_enter_rules);
         pre_tick_rules = std::move(next_pre_tick_rules);
         collision_rule_dispatch = std::move(next_collision_dispatch);
         grid_occupancy = std::move(next_grid_occupancy);
         scene_tick = next_scene_tick;
+        active_pooled_entities = 0U;
+        for (const auto& pool_state : pool_states) active_pooled_entities += pool_state.active_count;
+        peak_active_pooled_entities = std::max(peak_active_pooled_entities, active_pooled_entities);
         active_scene = scene_index;
         focused_button = restore_retained && scene_snapshots[scene_index].retained
                              ? scene_snapshots[scene_index].focused_button
@@ -735,6 +1100,169 @@ public:
         }
         for (std::uint32_t offset = 0U; offset < range.count; ++offset) {
             if (auto applied = function(entities[range.begin + offset]); !applied) return applied;
+        }
+        return {};
+    }
+
+    Result<void> spawn_from_pool(
+        const GameRuleActionPlan& action,
+        const CollisionEvent2D* const collision_event,
+        GameRuntimeFrameMetrics& metrics) {
+        ++metrics.pool_acquire_attempts;
+        if (action.pool_index >= pool_states.size()) {
+            return std::unexpected(pool_state_error("Pool acquisition references an invalid pool"));
+        }
+        auto& state = pool_states[action.pool_index];
+        if (!pool_storage_valid(action.pool_index, state)) {
+            return std::unexpected(pool_state_error("Pool acquisition found invalid runtime storage"));
+        }
+        const auto& pool = plan.scenes[active_scene].pools[action.pool_index];
+        bool recycle = false;
+        std::uint32_t slot = PoolRuntimeState::invalid_slot;
+        if (state.free_count != 0U) {
+            slot = state.free_ring[state.free_head];
+        } else {
+            ++metrics.pool_exhaustions;
+            if (pool.on_exhausted == GamePoolExhaustionPolicy::skip) {
+                if (action.has_result_state) set_state_value(action.result_state_index, 0);
+                return {};
+            }
+            if (state.active_head == PoolRuntimeState::invalid_slot) {
+                return std::unexpected(pool_state_error("Exhausted recycle pool has no oldest active slot"));
+            }
+            slot = state.active_head;
+            recycle = true;
+        }
+        if (slot >= state.acquired.size()) {
+            return std::unexpected(pool_state_error("Pool acquisition selected an out-of-range slot"));
+        }
+        auto& record = pool_record(action.pool_index, slot);
+        Vec2 base_position{};
+        if (action.pool_position_kind == GamePoolSpawnPositionKind::initial) {
+            base_position = record.initial_transform.position;
+        } else if (action.pool_position_kind == GamePoolSpawnPositionKind::constant) {
+            base_position = action.pool_position;
+        } else {
+            auto target = resolve_single_target(action.pool_position_target, collision_event);
+            if (!target) return std::unexpected(std::move(target.error()));
+            const bool captured_contact_target =
+                collision_event != nullptr && plan.schema_version == GameSchemaVersion::v0_5 &&
+                (action.pool_position_target.kind == GameRuleTargetKind::collision_a ||
+                 action.pool_position_target.kind == GameRuleTargetKind::collision_b);
+            if (captured_contact_target) {
+                base_position = action.pool_position_target.kind == GameRuleTargetKind::collision_a
+                                    ? collision_event->position_a
+                                    : collision_event->position_b;
+            } else {
+                const auto* transform = world->transform((*target)->entity);
+                if (transform == nullptr) {
+                    return std::unexpected(pool_state_error("Pool position target is missing Transform2D"));
+                }
+                base_position = transform->position;
+            }
+        }
+        const double position_x = static_cast<double>(base_position.x) + action.pool_position_offset.x;
+        const double position_y = static_cast<double>(base_position.y) + action.pool_position_offset.y;
+        if (!representable_float(position_x) || !representable_float(position_y)) {
+            return std::unexpected(runtime_error(
+                DiagnosticCode::runtime_numeric_state_invalid,
+                "Pool spawn position exceeds the supported numeric range"));
+        }
+        std::uint64_t expiration_tick = PoolRuntimeState::no_expiration;
+        if (action.has_lifetime) {
+            if (scene_tick > std::numeric_limits<std::uint64_t>::max() - action.lifetime_ticks) {
+                return std::unexpected(pool_state_error("Pool lifetime tick overflowed"));
+            }
+            expiration_tick = scene_tick + action.lifetime_ticks;
+        }
+        if (recycle) {
+            if (auto detached = detach_active_slot(state, slot); !detached) return detached;
+            set_entity_active(record, false, &metrics);
+            if (active_pooled_entities == 0U) {
+                return std::unexpected(pool_state_error("Pool recycle active entity count underflowed"));
+            }
+            --active_pooled_entities;
+            ++metrics.pool_recycled_slots;
+        } else {
+            auto popped = pop_free_slot(state);
+            if (!popped) return std::unexpected(std::move(popped.error()));
+            if (*popped != slot) {
+                return std::unexpected(pool_state_error("Pool FIFO head changed during acquisition"));
+            }
+        }
+        if (auto restored = restore_record_components(record); !restored) return restored;
+        auto* transform = world->transform(record.entity);
+        transform->position = {static_cast<float>(position_x), static_cast<float>(position_y)};
+        transform->previous_position = transform->position;
+        if (action.has_rotation_override) transform->rotation = action.rotation;
+        if (action.has_velocity_override) world->velocity(record.entity)->linear = action.velocity;
+        if (auto appended = append_active_slot(state, slot, PoolRuntimeState::no_expiration); !appended) {
+            return appended;
+        }
+        set_entity_active(record, true, &metrics);
+        state.expiration_ticks[slot] = expiration_tick;
+        ++active_pooled_entities;
+        peak_active_pooled_entities = std::max(peak_active_pooled_entities, active_pooled_entities);
+        ++metrics.pool_acquire_successes;
+        if (action.has_result_state) set_state_value(action.result_state_index, 1);
+        return {};
+    }
+
+    Result<void> release_to_pool(
+        const GameRuleActionPlan& action,
+        const CollisionEvent2D* const collision_event,
+        GameRuntimeFrameMetrics& metrics) {
+        if (action.pool_index >= pool_states.size()) {
+            return std::unexpected(pool_state_error("Pool release references an invalid pool"));
+        }
+        auto target = resolve_single_target(action.target, collision_event);
+        if (!target) return std::unexpected(std::move(target.error()));
+        auto& record = **target;
+        if (!record.pooled || record.pool_index != action.pool_index) {
+            return std::unexpected(pool_state_error("Pool release target is not owned by the requested pool"));
+        }
+        auto& state = pool_states[action.pool_index];
+        if (!pool_storage_valid(action.pool_index, state) || record.pool_slot_index >= state.acquired.size()) {
+            return std::unexpected(pool_state_error("Pool release target metadata is inconsistent"));
+        }
+        if (state.acquired[record.pool_slot_index] == 0U) {
+            ++metrics.pool_release_misses;
+            if (action.has_result_state) set_state_value(action.result_state_index, 0);
+            return {};
+        }
+        if (auto released = release_pool_slot(
+                action.pool_index, record.pool_slot_index, metrics, false);
+            !released) {
+            return released;
+        }
+        if (action.has_result_state) set_state_value(action.result_state_index, 1);
+        return {};
+    }
+
+    Result<void> expire_pool_lifetimes(GameRuntimeFrameMetrics& metrics) {
+        for (std::uint32_t pool_index = 0U; pool_index < pool_states.size(); ++pool_index) {
+            auto& state = pool_states[pool_index];
+            if (!pool_storage_valid(pool_index, state)) {
+                return std::unexpected(pool_state_error("Pool lifetime scan found invalid runtime storage"));
+            }
+            auto slot = state.active_head;
+            std::uint32_t visited = 0U;
+            while (slot != PoolRuntimeState::invalid_slot) {
+                if (slot >= state.acquired.size() || state.acquired[slot] == 0U ||
+                    visited >= state.acquired.size()) {
+                    return std::unexpected(pool_state_error("Pool lifetime scan found a corrupt active list"));
+                }
+                const auto next = state.active_next[slot];
+                ++metrics.pool_lifetime_checks;
+                if (state.expiration_ticks[slot] != PoolRuntimeState::no_expiration &&
+                    state.expiration_ticks[slot] <= scene_tick) {
+                    if (auto released = release_pool_slot(pool_index, slot, metrics, true); !released) {
+                        return released;
+                    }
+                }
+                slot = next;
+                ++visited;
+            }
         }
         return {};
     }
@@ -966,6 +1494,12 @@ public:
         case GameRuleActionKind::play_sound: return play_sound(action.asset_index);
         case GameRuleActionKind::relocate_to_free_cell:
             return relocate_to_free_cell(rule_index, action, collision_event, metrics);
+        case GameRuleActionKind::spawn_from_pool:
+            return spawn_from_pool(action, collision_event, metrics);
+        case GameRuleActionKind::release_to_pool:
+            return release_to_pool(action, collision_event, metrics);
+        case GameRuleActionKind::reset_pool:
+            return reset_pool(action.pool_index, &metrics);
         }
         return {};
     }
@@ -1015,10 +1549,39 @@ public:
     Result<void> apply_collision_events(
         const std::span<const CollisionEvent2D> events,
         GameRuntimeFrameMetrics& metrics) {
+        if (collision_event_epoch_snapshot.size() != entity_lifecycle_epochs.size()) {
+            return std::unexpected(runtime_error(
+                DiagnosticCode::runtime_contact_state_invalid,
+                "Collision event lifecycle storage does not match the active scene"));
+        }
+        std::copy(
+            entity_lifecycle_epochs.begin(), entity_lifecycle_epochs.end(),
+            collision_event_epoch_snapshot.begin());
+        const auto endpoint_index = [&](const EntityId entity) -> std::optional<std::size_t> {
+            if (entity.index < entities.size() && entities[entity.index].entity == entity) {
+                return static_cast<std::size_t>(entity.index);
+            }
+            const auto found = std::find_if(
+                entities.begin(), entities.end(), [&](const EntityRecord& record) {
+                    return record.entity == entity;
+                });
+            if (found == entities.end()) return std::nullopt;
+            return static_cast<std::size_t>(std::distance(entities.begin(), found));
+        };
         for (const auto& event : events) {
             if (event.rule_index >= plan.scenes[active_scene].collision_rules.size()) {
                 return std::unexpected(runtime_error(
                     DiagnosticCode::internal_error, "Collision event references an invalid rule"));
+            }
+            if (plan.schema_version == GameSchemaVersion::v0_5) {
+                const auto a_index = endpoint_index(event.entity_a);
+                const auto b_index = endpoint_index(event.entity_b);
+                if (!a_index || !b_index ||
+                    entity_lifecycle_epochs[*a_index] != collision_event_epoch_snapshot[*a_index] ||
+                    entity_lifecycle_epochs[*b_index] != collision_event_epoch_snapshot[*b_index]) {
+                    ++metrics.stale_contact_events;
+                    continue;
+                }
             }
             const auto& rule = plan.scenes[active_scene].collision_rules[event.rule_index];
             for (const auto& reaction : rule.reactions) {
@@ -1032,7 +1595,13 @@ public:
                     if (auto played = play_sound(reaction.asset_index); !played) return played;
                 }
             }
+            const auto expected_event = event.phase == CollisionEventPhase2D::contact_begin
+                                            ? GameRuleEventKind::contact_begin
+                                        : event.phase == CollisionEventPhase2D::contact_end
+                                            ? GameRuleEventKind::contact_end
+                                            : GameRuleEventKind::collision;
             for (const auto event_rule_index : collision_rule_dispatch[event.rule_index]) {
+                if (plan.scenes[active_scene].rules[event_rule_index].event.kind != expected_event) continue;
                 if (auto executed = execute_rule(event_rule_index, &event, metrics); !executed) return executed;
             }
         }
@@ -1042,6 +1611,9 @@ public:
     Result<CollisionMetrics2D> fixed_tick(
         const float delta_seconds,
         GameRuntimeFrameMetrics& frame_metrics) {
+        if (auto expired = expire_pool_lifetimes(frame_metrics); !expired) {
+            return std::unexpected(std::move(expired.error()));
+        }
         {
             auto transforms = world->query<Transform2D>();
             for (auto item : transforms) item.component.previous_position = item.component.position;
@@ -1084,6 +1656,12 @@ public:
                 if (!simulated) return std::unexpected(std::move(simulated.error()));
                 collision_metrics = *simulated;
                 frame_metrics.active_state_changes += collision_metrics.active_state_changes;
+                frame_metrics.trigger_narrowphase_tests += collision_metrics.trigger_narrowphase_tests;
+                frame_metrics.contact_begins += collision_metrics.contact_begins;
+                frame_metrics.contact_ends += collision_metrics.contact_ends;
+                frame_metrics.motion_segments += collision_metrics.motion_segments;
+                frame_metrics.peak_contact_pairs = std::max(
+                    frame_metrics.peak_contact_pairs, collision_metrics.peak_contact_pairs);
                 if (collision_metrics.iteration_limit_hits > 0U) {
                     warn_once(runtime_error(
                         DiagnosticCode::collision_iteration_limit, "Collision solver reached its impact limit"));
@@ -1091,6 +1669,8 @@ public:
                 if (auto applied = apply_collision_events(collision->events(), frame_metrics); !applied) {
                     return std::unexpected(std::move(applied.error()));
                 }
+                frame_metrics.active_contact_pairs =
+                    static_cast<std::uint32_t>(collision->active_contact_pairs().size());
             } else if (system.operation == GameOperationId::grid_motion) {
                 auto& runtime_state = system_states[system_index];
                 const auto range = group_ranges[system.spawn_group_index];
@@ -1134,6 +1714,32 @@ public:
                         const auto* active = world->entity_state(record.entity);
                         if (velocity != nullptr && active != nullptr && active->active) velocity->linear = velocity_value;
                     }
+                }
+                world->record_system_invocation();
+            } else if (system.operation == GameOperationId::linear_motion) {
+                const auto range = group_ranges[system.spawn_group_index];
+                for (std::uint32_t offset = 0U; offset < range.count; ++offset) {
+                    auto& record = entities[range.begin + offset];
+                    const auto* active = world->entity_state(record.entity);
+                    if (active == nullptr || !active->active) continue;
+                    auto* transform = world->transform(record.entity);
+                    const auto* velocity = world->velocity(record.entity);
+                    if (transform == nullptr || velocity == nullptr) {
+                        return std::unexpected(runtime_error(
+                            DiagnosticCode::internal_error,
+                            "linear_motion entity is missing Transform2D or Velocity2D"));
+                    }
+                    const double x = static_cast<double>(transform->position.x) +
+                                     static_cast<double>(velocity->linear.x) * delta_seconds;
+                    const double y = static_cast<double>(transform->position.y) +
+                                     static_cast<double>(velocity->linear.y) * delta_seconds;
+                    if (!representable_float(x) || !representable_float(y)) {
+                        return std::unexpected(runtime_error(
+                            DiagnosticCode::runtime_numeric_state_invalid,
+                            "linear_motion position exceeds the supported numeric range"));
+                    }
+                    transform->position = {static_cast<float>(x), static_cast<float>(y)};
+                    ++frame_metrics.linear_motion_updates;
                 }
                 world->record_system_invocation();
             } else if (system.operation == GameOperationId::follow_transform_chain) {
@@ -1435,10 +2041,18 @@ public:
             metrics.collision.candidate_pairs += collision_result->candidate_pairs;
             metrics.collision.narrowphase_tests += collision_result->narrowphase_tests;
             metrics.collision.contacts += collision_result->contacts;
+            metrics.collision.trigger_narrowphase_tests += collision_result->trigger_narrowphase_tests;
+            metrics.collision.contact_begins += collision_result->contact_begins;
+            metrics.collision.contact_ends += collision_result->contact_ends;
+            metrics.collision.active_contact_pairs = collision_result->active_contact_pairs;
+            metrics.collision.peak_contact_pairs = std::max(
+                metrics.collision.peak_contact_pairs, collision_result->peak_contact_pairs);
+            metrics.collision.motion_segments += collision_result->motion_segments;
             metrics.collision.toi_iterations += collision_result->toi_iterations;
             metrics.collision.iteration_limit_hits += collision_result->iteration_limit_hits;
             metrics.collision.grid_reference_capacity = collision_result->grid_reference_capacity;
             metrics.collision.candidate_capacity = collision_result->candidate_capacity;
+            metrics.collision.contact_capacity = collision_result->contact_capacity;
         }
         auto transitioned = apply_transition(metrics.quit_requested, metrics);
         if (!transitioned) return std::unexpected(std::move(transitioned.error()));
@@ -1481,6 +2095,29 @@ public:
                 metrics.scene_state_checksum += static_cast<double>(index + 1U) * 19.0;
             }
         }
+        for (std::size_t pool_index = 0U; pool_index < pool_states.size(); ++pool_index) {
+            const auto& pool_state = pool_states[pool_index];
+            const double pool_weight = static_cast<double>(pool_index + 1U);
+            metrics.scene_state_checksum += pool_weight *
+                                            (static_cast<double>(pool_state.active_count) * 31.0 +
+                                             static_cast<double>(pool_state.free_count) * 37.0);
+            const auto capacity = static_cast<std::uint32_t>(pool_state.free_ring.size());
+            for (std::uint32_t order = 0U; order < pool_state.free_count; ++order) {
+                const auto slot = pool_state.free_ring[(pool_state.free_head + order) % capacity];
+                metrics.scene_state_checksum += pool_weight * static_cast<double>(order + 1U) *
+                                                static_cast<double>(slot + 1U) * 41.0;
+            }
+            for (std::uint32_t slot = 0U; slot < pool_state.acquired.size(); ++slot) {
+                if (pool_state.acquired[slot] == 0U) continue;
+                metrics.scene_state_checksum += pool_weight * static_cast<double>(slot + 1U) * 43.0;
+                if (pool_state.expiration_ticks[slot] != PoolRuntimeState::no_expiration) {
+                    metrics.scene_state_checksum +=
+                        pool_weight * static_cast<double>(pool_state.expiration_ticks[slot] & 0xFFFF'FFFFULL) * 47.0;
+                }
+            }
+        }
+        metrics.active_pooled_entities = active_pooled_entities;
+        metrics.peak_active_pooled_entities = peak_active_pooled_entities;
         metrics.frame_cpu_ms = timer.elapsed_milliseconds();
         ++frame_index;
         return metrics;
@@ -1527,6 +2164,14 @@ public:
             scene_snapshots[scene_index].entity_states.resize(count);
             scene_snapshots[scene_index].system_states.resize(plan.scenes[scene_index].systems.size());
             scene_snapshots[scene_index].rule_invocations.resize(plan.scenes[scene_index].rules.size());
+            scene_snapshots[scene_index].pool_states.resize(plan.scenes[scene_index].pools.size());
+            scene_snapshots[scene_index].contacts.reserve(plan.scenes[scene_index].max_contact_pairs);
+            for (std::size_t pool_index = 0U; pool_index < plan.scenes[scene_index].pools.size(); ++pool_index) {
+                const auto group_index = plan.scenes[scene_index].pools[pool_index].spawn_group_index;
+                const auto& group = plan.scenes[scene_index].spawn_groups[group_index];
+                initialize_pool_storage(
+                    scene_snapshots[scene_index].pool_states[pool_index], group.count, group.active_count);
+            }
         }
         state_indices.reserve(plan.states.size());
         for (std::size_t index = 0U; index < plan.states.size(); ++index) {
@@ -1823,6 +2468,75 @@ Result<std::int32_t> GameRuntime::state_value(const std::string_view state_name)
         return std::unexpected(runtime_error(DiagnosticCode::input_invalid, "Requested game state does not exist"));
     }
     return impl_->states[found->second];
+}
+
+Result<std::int32_t> GameRuntime::state_value(const std::uint32_t state_index) const {
+    if (!impl_->ready || state_index >= impl_->states.size()) {
+        return std::unexpected(runtime_error(
+            DiagnosticCode::input_invalid, "Numeric game state index is invalid"));
+    }
+    return impl_->states[state_index];
+}
+
+Result<std::uint32_t> GameRuntime::group_active_count(const std::uint32_t spawn_group_index) const {
+    if (!impl_->ready || spawn_group_index >= impl_->group_ranges.size()) {
+        return std::unexpected(runtime_error(
+            DiagnosticCode::input_invalid, "Numeric spawn group index is invalid for the active scene"));
+    }
+    return impl_->group_active_count(spawn_group_index);
+}
+
+Result<bool> GameRuntime::entity_active(
+    const std::uint32_t spawn_group_index,
+    const std::uint32_t item_index) const {
+    if (!impl_->ready || spawn_group_index >= impl_->group_ranges.size() ||
+        item_index >= impl_->group_ranges[spawn_group_index].count) {
+        return std::unexpected(runtime_error(DiagnosticCode::input_invalid, "Numeric entity target is invalid"));
+    }
+    const auto& range = impl_->group_ranges[spawn_group_index];
+    const auto* state = impl_->world->entity_state(impl_->entities[range.begin + item_index].entity);
+    if (state == nullptr) {
+        return std::unexpected(runtime_error(DiagnosticCode::internal_error, "Entity is missing active state"));
+    }
+    return state->active;
+}
+
+Result<Vec2> GameRuntime::entity_position(
+    const std::uint32_t spawn_group_index,
+    const std::uint32_t item_index) const {
+    if (!impl_->ready || spawn_group_index >= impl_->group_ranges.size() ||
+        item_index >= impl_->group_ranges[spawn_group_index].count) {
+        return std::unexpected(runtime_error(DiagnosticCode::input_invalid, "Numeric entity target is invalid"));
+    }
+    const auto& range = impl_->group_ranges[spawn_group_index];
+    const auto* transform = impl_->world->transform(impl_->entities[range.begin + item_index].entity);
+    if (transform == nullptr) {
+        return std::unexpected(runtime_error(DiagnosticCode::internal_error, "Entity is missing Transform2D"));
+    }
+    return transform->position;
+}
+
+Result<Vec2> GameRuntime::entity_velocity(
+    const std::uint32_t spawn_group_index,
+    const std::uint32_t item_index) const {
+    if (!impl_->ready || spawn_group_index >= impl_->group_ranges.size() ||
+        item_index >= impl_->group_ranges[spawn_group_index].count) {
+        return std::unexpected(runtime_error(DiagnosticCode::input_invalid, "Numeric entity target is invalid"));
+    }
+    const auto& range = impl_->group_ranges[spawn_group_index];
+    const auto* velocity = impl_->world->velocity(impl_->entities[range.begin + item_index].entity);
+    if (velocity == nullptr) {
+        return std::unexpected(runtime_error(DiagnosticCode::input_invalid, "Entity has no Velocity2D"));
+    }
+    return velocity->linear;
+}
+
+std::uint32_t GameRuntime::current_scene_index() const noexcept {
+    return impl_->ready ? impl_->active_scene : std::numeric_limits<std::uint32_t>::max();
+}
+
+std::uint64_t GameRuntime::contact_state_checksum() const noexcept {
+    return impl_->ready && impl_->collision != nullptr ? impl_->collision->contact_state_checksum() : 0U;
 }
 
 std::string_view GameRuntime::current_scene() const noexcept {

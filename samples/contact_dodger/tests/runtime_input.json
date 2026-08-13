@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "events": [
+    {"tick": 0, "action": "fire", "kind": "tap"},
+    {"tick": 1, "action": "fire", "kind": "tap"},
+    {"tick": 70, "action": "fire", "kind": "tap"},
+    {"tick": 71, "action": "fire", "kind": "tap"},
+    {"tick": 140, "action": "surge", "kind": "tap"}
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": "1",
+  "frames": 250,
+  "events": [
+    {"tick": 140, "action": "surge", "kind": "tap"},
+    {"tick": 225, "action": "restart", "kind": "tap"}
+  ],
+  "assertions": [
+    {"tick": 220, "kind": "int_state", "state": "health", "op": "eq", "value": 0},
+    {"tick": 220, "kind": "int_state", "state": "loss", "op": "eq", "value": 1},
+    {"tick": 220, "kind": "int_state", "state": "win", "op": "eq", "value": 0},
+    {"tick": 220, "kind": "runtime_metric", "metric": "contact_ends", "op": "ge", "value": 1},
+    {"tick": 226, "kind": "current_scene", "scene": "play"},
+    {"tick": 226, "kind": "int_state", "state": "health", "op": "eq", "value": 3},
+    {"tick": 226, "kind": "int_state", "state": "score", "op": "eq", "value": 0},
+    {"tick": 226, "kind": "int_state", "state": "loss", "op": "eq", "value": 0},
+    {"tick": 226, "kind": "group_active_count", "scene": "play", "group": "enemy_slots", "op": "eq", "value": 1}
+  ]
+}

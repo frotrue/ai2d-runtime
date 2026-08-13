@@ -1,0 +1,169 @@
+{
+  "schema_version": "0.5",
+  "id": "play",
+  "world": {"capacity": 16},
+  "camera": {"position": [0, 0], "half_extent": [16, 9]},
+  "collision": {
+    "bounds": [-18, -10, 18, 10],
+    "cell_size": [2, 2],
+    "max_colliders": 8,
+    "max_grid_references": 128,
+    "max_candidate_pairs": 64,
+    "max_contact_pairs": 32,
+    "max_impacts": 4
+  },
+  "grids": [],
+  "spawn_groups": [
+    {
+      "id": "player",
+      "count": 1,
+      "active_count": 1,
+      "placement": {"kind": "grid", "origin": [-10, 0], "spacing": [0, 0], "columns": 1},
+      "velocity": {"linear": [0, 0]},
+      "sprite": {"texture": "sprites", "size": [1.4, 1.4], "uv": [0, 0, 0.25, 0.25], "layer": 3},
+      "collider": {"half_extent": [0.6, 0.6], "group": "player", "body": "kinematic"}
+    },
+    {
+      "id": "scan_gate",
+      "count": 1,
+      "active_count": 1,
+      "placement": {"kind": "grid", "origin": [0, 0], "spacing": [0, 0], "columns": 1},
+      "sprite": {"texture": "sprites", "size": [1.5, 10], "uv": [0, 0.25, 0.25, 0.25], "tint": [0.5, 1, 0.9, 0.7], "layer": 1},
+      "collider": {"half_extent": [0.75, 5], "group": "gate", "body": "static"}
+    },
+    {
+      "id": "bullet_slots",
+      "count": 1,
+      "active_count": 0,
+      "placement": {"kind": "grid", "origin": [-10, 0], "spacing": [0, 0], "columns": 1},
+      "velocity": {"linear": [0, 0]},
+      "sprite": {"texture": "sprites", "size": [0.8, 0.35], "uv": [0.25, 0, 0.25, 0.25], "layer": 4},
+      "collider": {"half_extent": [0.4, 0.175], "group": "bullet", "body": "kinematic"}
+    },
+    {
+      "id": "enemy_slots",
+      "count": 2,
+      "active_count": 0,
+      "placement": {"kind": "grid", "origin": [4, 0], "spacing": [0, 0], "columns": 1},
+      "velocity": {"linear": [0, 0]},
+      "sprite": {"texture": "sprites", "size": [1, 1], "uv": [0.5, 0, 0.25, 0.25], "layer": 3},
+      "collider": {"half_extent": [0.5, 0.5], "group": "enemy", "body": "kinematic"}
+    },
+    {
+      "id": "effect_slots",
+      "count": 2,
+      "active_count": 0,
+      "placement": {"kind": "grid", "origin": [0, 0], "spacing": [0, 0], "columns": 1},
+      "sprite": {"texture": "sprites", "size": [1.2, 1.2], "uv": [0.75, 0, 0.25, 0.25], "layer": 5}
+    }
+  ],
+  "pools": [
+    {"id": "bullets", "group": "bullet_slots", "on_exhausted": "skip"},
+    {"id": "enemies", "group": "enemy_slots", "on_exhausted": "recycle_oldest"},
+    {"id": "effects", "group": "effect_slots", "on_exhausted": "skip"}
+  ],
+  "systems": [
+    {"id": "player_motion", "operation": "axis_control", "group": "player", "negative_action": "move_left", "positive_action": "move_right", "speed": 6, "min": -13, "max": -7},
+    {"id": "bullet_motion", "operation": "linear_motion", "spawn_group": "bullet_slots"},
+    {"id": "enemy_motion", "operation": "linear_motion", "spawn_group": "enemy_slots"},
+    {"id": "contacts", "operation": "simulate_collisions"}
+  ],
+  "collision_rules": [
+    {"id": "bullet_hits_enemy", "a": "bullet", "b": "enemy", "interaction": "trigger", "reactions": []},
+    {"id": "enemy_crosses_gate", "a": "enemy", "b": "gate", "interaction": "trigger", "reactions": []}
+  ],
+  "rules": [
+    {
+      "id": "initial_enemy",
+      "event": {"kind": "scene_enter"},
+      "actions": [
+        {"kind": "spawn_from_pool", "pool": "enemies", "position": {"kind": "constant", "value": [4, 0]}, "velocity": [-4, 0], "lifetime_ticks": 120, "result_state": "enemy_spawn_ok"}
+      ]
+    },
+    {
+      "id": "scheduled_enemy",
+      "event": {"kind": "fixed_interval", "interval_ticks": 120},
+      "actions": [
+        {"kind": "spawn_from_pool", "pool": "enemies", "position": {"kind": "constant", "value": [4, 0]}, "velocity": [-4, 0], "lifetime_ticks": 120, "result_state": "enemy_spawn_ok"}
+      ]
+    },
+    {
+      "id": "fire_projectile",
+      "event": {"kind": "action_pressed", "action": "fire"},
+      "actions": [
+        {"kind": "spawn_from_pool", "pool": "bullets", "position": {"kind": "target", "target": {"kind": "index", "group": "player", "index": 0}, "offset": [0.8, 0]}, "velocity": [12, 0], "lifetime_ticks": 90, "result_state": "shot_ok"}
+      ]
+    },
+    {
+      "id": "enemy_surge",
+      "event": {"kind": "action_pressed", "action": "surge"},
+      "actions": [
+        {"kind": "spawn_from_pool", "pool": "enemies", "position": {"kind": "constant", "value": [4, 3]}, "velocity": [-4, 0], "lifetime_ticks": 120, "result_state": "enemy_spawn_ok"},
+        {"kind": "spawn_from_pool", "pool": "enemies", "position": {"kind": "constant", "value": [4, -3]}, "velocity": [-4, 0], "lifetime_ticks": 120, "result_state": "enemy_spawn_ok"},
+        {"kind": "spawn_from_pool", "pool": "enemies", "position": {"kind": "constant", "value": [4, 1.5]}, "velocity": [-4, 0], "lifetime_ticks": 120, "result_state": "enemy_spawn_ok"}
+      ]
+    },
+    {
+      "id": "projectile_contact",
+      "event": {"kind": "contact_begin", "rule": "bullet_hits_enemy"},
+      "actions": [
+        {"kind": "spawn_from_pool", "pool": "effects", "position": {"kind": "target", "target": {"kind": "collision_b"}, "offset": [0, 0]}, "lifetime_ticks": 12, "result_state": "effect_spawn_ok"},
+        {"kind": "release_to_pool", "pool": "bullets", "target": {"kind": "collision_a"}, "result_state": "bullet_release_ok"},
+        {"kind": "release_to_pool", "pool": "enemies", "target": {"kind": "collision_b"}, "result_state": "enemy_release_ok"},
+        {"kind": "add_int_state", "state": "score", "value": 2},
+        {"kind": "add_int_state", "state": "hits", "value": 1}
+      ]
+    },
+    {
+      "id": "gate_contact_started",
+      "event": {"kind": "contact_begin", "rule": "enemy_crosses_gate"},
+      "conditions": [
+        {"kind": "int_state", "state": "health", "op": "gt", "value": 0}
+      ],
+      "actions": [
+        {"kind": "add_int_state", "state": "health", "value": -1},
+        {"kind": "add_int_state", "state": "gate_entries", "value": 1}
+      ]
+    },
+    {
+      "id": "gate_contact_finished",
+      "event": {"kind": "contact_end", "rule": "enemy_crosses_gate"},
+      "actions": [
+        {"kind": "add_int_state", "state": "gate_ends", "value": 1}
+      ]
+    },
+    {
+      "id": "declare_win",
+      "event": {"kind": "fixed_interval", "interval_ticks": 1},
+      "conditions": [
+        {"kind": "int_state", "state": "score", "op": "ge", "value": 4},
+        {"kind": "int_state", "state": "win", "op": "eq", "value": 0},
+        {"kind": "int_state", "state": "loss", "op": "eq", "value": 0}
+      ],
+      "actions": [
+        {"kind": "set_int_state", "state": "win", "value": 1}
+      ]
+    },
+    {
+      "id": "declare_loss",
+      "event": {"kind": "fixed_interval", "interval_ticks": 1},
+      "conditions": [
+        {"kind": "int_state", "state": "health", "op": "le", "value": 0},
+        {"kind": "int_state", "state": "loss", "op": "eq", "value": 0},
+        {"kind": "int_state", "state": "win", "op": "eq", "value": 0}
+      ],
+      "actions": [
+        {"kind": "set_int_state", "state": "loss", "value": 1}
+      ]
+    }
+  ],
+  "ui": [
+    {"id": "top_bar", "kind": "panel", "position": [0, 0], "size": [1280, 92], "color": [0.02, 0.04, 0.09, 0.9], "layer": 10},
+    {"id": "title", "kind": "text", "position": [24, 14], "size": [330, 30], "text": "CONTACT DODGER", "font": "hud_font", "text_color": [0.65, 0.95, 1, 1], "layer": 11, "text_scale": 2},
+    {"id": "score_text", "kind": "text", "position": [380, 16], "size": [190, 28], "text": "SCORE {score}", "font": "hud_font", "text_color": [1, 0.9, 0.35, 1], "layer": 11, "text_scale": 2},
+    {"id": "health_text", "kind": "text", "position": [590, 16], "size": [210, 28], "text": "HEALTH {health}", "font": "hud_font", "text_color": [1, 0.45, 0.55, 1], "layer": 11, "text_scale": 2},
+    {"id": "result_text", "kind": "text", "position": [820, 16], "size": [210, 28], "text": "WIN {win} LOSS {loss}", "font": "hud_font", "text_color": [0.65, 1, 0.65, 1], "layer": 11, "text_scale": 2},
+    {"id": "instructions", "kind": "text", "position": [24, 56], "size": [600, 22], "text": "ARROWS MOVE  SPACE FIRE  TAB SURGE", "font": "hud_font", "text_color": [0.7, 0.75, 0.85, 1], "layer": 11, "text_scale": 1.5},
+    {"id": "restart_button", "kind": "button", "position": [1090, 12], "size": [165, 58], "text": "RESTART", "font": "hud_font", "action": "restart", "color": [0.12, 0.25, 0.36, 0.95], "hover_color": [0.2, 0.48, 0.62, 1], "text_color": [0.9, 1, 1, 1], "layer": 12, "text_scale": 1.7}
+  ]
+}

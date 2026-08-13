@@ -11,6 +11,11 @@ Every diagnostic contains `code`, `severity`, `subsystem`, `message`, a structur
 | `TOOL_VERSION_UNSUPPORTED` | A tool exists but cannot satisfy the required contract. |
 | `COMMAND_UNAVAILABLE` | A command implementation or its built binary is not present. |
 | `INPUT_INVALID` | CLI input is malformed independently of ScenarioSpec semantics. |
+| `GAME_COLLISION_INTERACTION_INVALID` | A v0.5 solid/trigger body, reaction, event, capacity, or motion-ownership contract is invalid. |
+| `GAME_TEST_ASSERTION_FAILED` | A compiled black-box assertion did not match its observed value. |
+| `GAME_TEST_NONDETERMINISTIC` | Fresh repeated verification runs produced different observations, final state, metrics, or checksums. |
+| `RUNTIME_CONTACT_STATE_INVALID` | A retained/runtime contact pair or lifecycle invariant is corrupt. |
+| `COLLISION_CONTACT_CAPACITY_EXCEEDED` | Fixed contact, event, or motion-segment storage could not accept more data. |
 | `IR_SCHEMA_INVALID` | ScenarioSpec shape/type/required field is invalid. |
 | `IR_SCHEMA_VERSION_UNSUPPORTED` | `schema_version` is not supported. |
 | `IR_UNKNOWN_OPERATION` | A system names an operation outside the built-in table. |

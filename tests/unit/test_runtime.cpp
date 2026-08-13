@@ -6,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <limits>
@@ -16,6 +17,10 @@ namespace {
 
 const std::filesystem::path scenario_root{AI2D_SOURCE_DIR "/tests/fixtures/scenarios/valid"};
 const std::filesystem::path snake_manifest{AI2D_SOURCE_DIR "/samples/snake/game.json"};
+const std::filesystem::path projectile_arena_manifest{AI2D_SOURCE_DIR "/samples/projectile_arena/game.json"};
+const std::filesystem::path timed_pickups_manifest{AI2D_SOURCE_DIR "/samples/timed_pickups/game.json"};
+const std::filesystem::path pool_siege_manifest{AI2D_SOURCE_DIR "/samples/pool_siege/game.json"};
+const std::filesystem::path contact_course_manifest{AI2D_SOURCE_DIR "/samples/contact_course/game.json"};
 
 } // namespace
 
@@ -379,4 +384,592 @@ TEST_CASE("Public GamePlan validation rejects overflowing derived spawn coordina
     options.load_saved_settings = false;
     const auto initialized = runtime.initialize(plan, options);
     REQUIRE_FALSE(initialized);
+}
+
+TEST_CASE("Pool FIFO supports exhausted recycle ordered release reuse and release misses") {
+    auto compiled = ai2d::compile_game_file(projectile_arena_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto& scene = plan.scenes[plan.start_scene];
+    scene.rules.clear();
+    const auto symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+    plan.symbols.emplace_back("ordered_pool_churn");
+    ai2d::GameRulePlan rule{};
+    rule.symbol = symbol;
+    rule.event.kind = ai2d::GameRuleEventKind::fixed_interval;
+    rule.event.interval_ticks = 1U;
+    for (std::uint32_t index = 0U; index < 3U; ++index) {
+        ai2d::GameRuleActionPlan spawn{};
+        spawn.kind = ai2d::GameRuleActionKind::spawn_from_pool;
+        spawn.pool_index = 0U;
+        spawn.pool_position_kind = ai2d::GamePoolSpawnPositionKind::constant;
+        spawn.pool_position = {static_cast<float>(index + 1U), 0.0F};
+        rule.actions.push_back(spawn);
+    }
+    ai2d::GameRuleActionPlan recycled{};
+    recycled.kind = ai2d::GameRuleActionKind::spawn_from_pool;
+    recycled.pool_index = 0U;
+    recycled.pool_position_kind = ai2d::GamePoolSpawnPositionKind::constant;
+    recycled.pool_position = {9.0F, 0.0F};
+    rule.actions.push_back(recycled);
+    ai2d::GameRuleActionPlan release{};
+    release.kind = ai2d::GameRuleActionKind::release_to_pool;
+    release.pool_index = 0U;
+    release.target.kind = ai2d::GameRuleTargetKind::spawn_index;
+    release.target.spawn_group_index = scene.pools[0U].spawn_group_index;
+    release.target.item_index = 0U;
+    rule.actions.push_back(release);
+    rule.actions.push_back(release);
+    ai2d::GameRuleActionPlan reuse = recycled;
+    reuse.pool_position = {12.0F, 0.0F};
+    rule.actions.push_back(reuse);
+    scene.rules.push_back(rule);
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+    const auto frame = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(frame);
+    CHECK(frame->pool_acquire_attempts == 5U);
+    CHECK(frame->pool_acquire_successes == 5U);
+    CHECK(frame->pool_exhaustions == 1U);
+    CHECK(frame->pool_recycled_slots == 1U);
+    CHECK(frame->pool_releases == 1U);
+    CHECK(frame->pool_release_misses == 1U);
+    CHECK(frame->active_pooled_entities == 3U);
+    CHECK(frame->peak_active_pooled_entities == 3U);
+}
+
+TEST_CASE("Pool lifetime expires before its exact tick boundary and permits same-tick reacquire") {
+    auto compiled = ai2d::compile_game_file(timed_pickups_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto& scene = plan.scenes[plan.start_scene];
+    scene.spawn_groups[scene.pools[0U].spawn_group_index].count = 1U;
+    scene.total_spawn_count = 2U;
+    scene.rules.clear();
+    const auto symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+    plan.symbols.emplace_back("lifetime_boundary");
+    ai2d::GameRulePlan rule{};
+    rule.symbol = symbol;
+    rule.event.kind = ai2d::GameRuleEventKind::fixed_interval;
+    rule.event.interval_ticks = 1U;
+    ai2d::GameRuleActionPlan spawn{};
+    spawn.kind = ai2d::GameRuleActionKind::spawn_from_pool;
+    spawn.pool_index = 0U;
+    spawn.pool_position_kind = ai2d::GamePoolSpawnPositionKind::initial;
+    spawn.has_lifetime = true;
+    spawn.lifetime_ticks = 2U;
+    rule.actions.push_back(spawn);
+    scene.rules.push_back(rule);
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+    const auto first = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(first);
+    CHECK(first->pool_acquire_successes == 1U);
+    CHECK(first->active_pooled_entities == 1U);
+    const auto second = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(second);
+    CHECK(second->pool_expirations == 0U);
+    CHECK(second->pool_exhaustions == 1U);
+    CHECK(second->active_pooled_entities == 1U);
+    const auto third = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(third);
+    CHECK(third->pool_expirations == 1U);
+    CHECK(third->pool_acquire_successes == 1U);
+    CHECK(third->active_pooled_entities == 1U);
+}
+
+TEST_CASE("Collision rules can release and spawn a one-tick pooled object before its exact expiration") {
+    auto compiled = ai2d::compile_game_file(projectile_arena_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto& scene = plan.scenes[plan.start_scene];
+    auto collision_rule = std::find_if(
+        scene.rules.begin(), scene.rules.end(),
+        [](const ai2d::GameRulePlan& rule) {
+            return rule.event.kind == ai2d::GameRuleEventKind::collision &&
+                   rule.event.collision_rule_index == 0U;
+        });
+    REQUIRE(collision_rule != scene.rules.end());
+    collision_rule->actions.clear();
+    ai2d::GameRuleActionPlan release{};
+    release.kind = ai2d::GameRuleActionKind::release_to_pool;
+    release.pool_index = 0U;
+    release.target.kind = ai2d::GameRuleTargetKind::collision_a;
+    collision_rule->actions.push_back(release);
+    ai2d::GameRuleActionPlan spawn{};
+    spawn.kind = ai2d::GameRuleActionKind::spawn_from_pool;
+    spawn.pool_index = 0U;
+    spawn.pool_position_kind = ai2d::GamePoolSpawnPositionKind::target;
+    spawn.pool_position_target.kind = ai2d::GameRuleTargetKind::collision_b;
+    spawn.pool_position_offset = {0.0F, 3.0F};
+    spawn.has_velocity_override = true;
+    spawn.velocity = {};
+    spawn.has_lifetime = true;
+    spawn.lifetime_ticks = 1U;
+    collision_rule->actions.push_back(spawn);
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+    actions[0U].pressed = true;
+    actions[0U].down = true;
+    REQUIRE(runtime.run_exact_actions(actions, 1U));
+    actions[0U] = {};
+
+    bool collision_spawned = false;
+    for (std::uint32_t tick = 0U; tick < 100U; ++tick) {
+        const auto frame = runtime.run_exact_actions(actions, 1U);
+        REQUIRE(frame);
+        if (frame->pool_releases == 0U) continue;
+        CHECK(frame->collision.contacts >= 1U);
+        CHECK(frame->pool_acquire_successes == 1U);
+        CHECK(frame->active_pooled_entities == 1U);
+        collision_spawned = true;
+        break;
+    }
+    REQUIRE(collision_spawned);
+    const auto expired = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(expired);
+    CHECK(expired->pool_expirations == 1U);
+    CHECK(expired->active_pooled_entities == 0U);
+}
+
+TEST_CASE("Pool spawn synchronizes interpolation history after restoring authored components") {
+    auto compiled = ai2d::compile_game_file(projectile_arena_manifest);
+    REQUIRE(compiled);
+    auto constant_plan = *compiled;
+    auto initial_plan = *compiled;
+    const auto prepare = [](ai2d::GamePlan& plan, const bool authored_position) {
+        auto& scene = plan.scenes[plan.start_scene];
+        auto& group = scene.spawn_groups[scene.pools[0U].spawn_group_index];
+        group.count = 1U;
+        group.active_count = 0U;
+        if (authored_position) group.placement.origin = {4.0F, 2.0F};
+        scene.total_spawn_count = 4U;
+        scene.rules.clear();
+        const auto symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+        plan.symbols.emplace_back(authored_position ? "spawn_initial_history" : "spawn_constant_history");
+        ai2d::GameRulePlan rule{};
+        rule.symbol = symbol;
+        rule.event.kind = ai2d::GameRuleEventKind::fixed_interval;
+        rule.event.interval_ticks = 1U;
+        ai2d::GameRuleActionPlan spawn{};
+        spawn.kind = ai2d::GameRuleActionKind::spawn_from_pool;
+        spawn.pool_index = 0U;
+        spawn.pool_position_kind = authored_position
+                                       ? ai2d::GamePoolSpawnPositionKind::initial
+                                       : ai2d::GamePoolSpawnPositionKind::constant;
+        spawn.pool_position = {4.0F, 2.0F};
+        rule.actions.push_back(spawn);
+        scene.rules.push_back(rule);
+        plan.transitions.clear();
+        plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    };
+    prepare(constant_plan, false);
+    prepare(initial_plan, true);
+    REQUIRE(ai2d::validate_game_plan(constant_plan));
+    REQUIRE(ai2d::validate_game_plan(initial_plan));
+
+    ai2d::GameRuntime constant_runtime{};
+    ai2d::GameRuntime initial_runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(constant_runtime.initialize(constant_plan, options));
+    REQUIRE(initial_runtime.initialize(initial_plan, options));
+    std::vector<ai2d::GameActionInput> actions(constant_plan.actions.size());
+    const auto constant = constant_runtime.run_exact_actions(actions, 1U);
+    const auto initial = initial_runtime.run_exact_actions(actions, 1U);
+    REQUIRE(constant);
+    REQUIRE(initial);
+    CHECK(constant->active_pooled_entities == 1U);
+    CHECK(constant->scene_state_checksum == initial->scene_state_checksum);
+}
+
+TEST_CASE("reset_pool restores initial prefix components and lifecycle ordering") {
+    auto compiled = ai2d::compile_game_file(projectile_arena_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto& scene = plan.scenes[plan.start_scene];
+    scene.rules.clear();
+    const auto symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+    plan.symbols.emplace_back("spawn_then_reset_pool");
+    ai2d::GameRulePlan rule{};
+    rule.symbol = symbol;
+    rule.event.kind = ai2d::GameRuleEventKind::fixed_interval;
+    rule.event.interval_ticks = 1U;
+    ai2d::GameRuleActionPlan spawn{};
+    spawn.kind = ai2d::GameRuleActionKind::spawn_from_pool;
+    spawn.pool_index = 0U;
+    spawn.pool_position_kind = ai2d::GamePoolSpawnPositionKind::constant;
+    spawn.pool_position = {9.0F, 3.0F};
+    spawn.has_velocity_override = true;
+    spawn.velocity = {4.0F, 2.0F};
+    spawn.has_rotation_override = true;
+    spawn.rotation = 1.0F;
+    spawn.has_lifetime = true;
+    spawn.lifetime_ticks = 99U;
+    rule.actions.push_back(spawn);
+    ai2d::GameRuleActionPlan reset{};
+    reset.kind = ai2d::GameRuleActionKind::reset_pool;
+    reset.pool_index = 0U;
+    rule.actions.push_back(reset);
+    scene.rules.push_back(rule);
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+    const auto frame = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(frame);
+    CHECK(frame->pool_acquire_successes == 1U);
+    CHECK(frame->pool_resets == 1U);
+    CHECK(frame->active_pooled_entities == 0U);
+    CHECK(frame->pool_lifetime_checks == 0U);
+}
+
+TEST_CASE("Retained scene snapshots restore exact pool FIFO active order and lifetime state") {
+    auto plan = ai2d::compile_game_file(timed_pickups_manifest);
+    REQUIRE(plan);
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntime reference_runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(*plan, options));
+    REQUIRE(reference_runtime.initialize(*plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan->actions.size());
+    auto before = reference_runtime.run_exact_actions(actions, 30U);
+    REQUIRE(before);
+    CHECK(before->active_pooled_entities == 1U);
+    REQUIRE(runtime.run_exact_actions(actions, 29U));
+    actions[2U].pressed = true;
+    actions[2U].down = true;
+    const auto paused = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(paused);
+    CHECK(runtime.current_scene() == "pause");
+    actions[2U].down = false;
+    actions[2U].pressed = false;
+    REQUIRE(runtime.run_exact_actions(actions, 1U));
+    actions[2U].pressed = true;
+    actions[2U].down = true;
+    const auto restored = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(restored);
+    CHECK(runtime.current_scene() == "game");
+    CHECK(restored->active_pooled_entities == 1U);
+    CHECK(restored->scene_state_checksum == before->scene_state_checksum);
+}
+
+TEST_CASE("Maximum pool capacity sustains recycle churn with zero tracked allocation") {
+    auto compiled = ai2d::compile_game_file(projectile_arena_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto& scene = plan.scenes[plan.start_scene];
+    auto pooled_group = scene.spawn_groups[scene.pools[0U].spawn_group_index];
+    pooled_group.count = 10'000U;
+    pooled_group.active_count = 10'000U;
+    pooled_group.placement.origin = {};
+    pooled_group.placement.spacing = {};
+    pooled_group.placement.columns = 10'000U;
+    scene.spawn_groups.clear();
+    scene.spawn_groups.push_back(pooled_group);
+    scene.pools[0U].spawn_group_index = 0U;
+    scene.world_capacity = 10'000U;
+    scene.total_spawn_count = 10'000U;
+    scene.max_colliders = 10'000U;
+    scene.systems.clear();
+    scene.collision_rules.clear();
+    scene.ui.clear();
+    scene.rules.clear();
+    const auto symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+    plan.symbols.emplace_back("maximum_pool_churn");
+    ai2d::GameRulePlan rule{};
+    rule.symbol = symbol;
+    rule.event.kind = ai2d::GameRuleEventKind::fixed_interval;
+    rule.event.interval_ticks = 1U;
+    ai2d::GameRuleActionPlan spawn{};
+    spawn.kind = ai2d::GameRuleActionKind::spawn_from_pool;
+    spawn.pool_index = 0U;
+    spawn.pool_position_kind = ai2d::GamePoolSpawnPositionKind::initial;
+    rule.actions.push_back(spawn);
+    scene.rules.push_back(rule);
+    plan.transitions.clear();
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+    REQUIRE(runtime.run_exact_actions(actions, 2U));
+    ai2d::MeasuredAllocationScope measured{};
+    const auto frame = runtime.run_exact_actions(actions, 1'000U);
+    const auto allocations = measured.finish();
+    REQUIRE(frame);
+    CHECK(frame->pool_acquire_successes == 1'000U);
+    CHECK(frame->pool_exhaustions == 1'000U);
+    CHECK(frame->pool_recycled_slots == 1'000U);
+    CHECK(frame->active_pooled_entities == 10'000U);
+    CHECK(allocations.allocations == 0U);
+    CHECK(allocations.bytes == 0U);
+}
+
+TEST_CASE("Moving contact runtime observes one persistent begin and one active separation end") {
+    const auto plan = ai2d::compile_game_file(contact_course_manifest);
+    REQUIRE(plan);
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(*plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan->actions.size());
+
+    ai2d::MeasuredAllocationScope measured{};
+    const auto entered = runtime.run_exact_actions(actions, 56U);
+    const auto persisted = runtime.run_exact_actions(actions, 25U);
+    const auto exited = runtime.run_exact_actions(actions, 25U);
+    const auto allocations = measured.finish();
+    REQUIRE(entered);
+    REQUIRE(persisted);
+    REQUIRE(exited);
+    CHECK(entered->collision.contact_begins == 1U);
+    CHECK(entered->collision.contact_ends == 0U);
+    CHECK(entered->collision.active_contact_pairs == 1U);
+    CHECK(persisted->collision.contact_begins == 0U);
+    CHECK(persisted->collision.contact_ends == 0U);
+    CHECK(persisted->collision.active_contact_pairs == 1U);
+    CHECK(exited->collision.contact_begins == 0U);
+    CHECK(exited->collision.contact_ends == 1U);
+    CHECK(exited->collision.active_contact_pairs == 0U);
+    REQUIRE(runtime.state_value(0U));
+    REQUIRE(runtime.state_value(1U));
+    CHECK(*runtime.state_value(0U) == 1);
+    CHECK(*runtime.state_value(1U) == 1);
+    REQUIRE(runtime.entity_position(0U, 0U));
+    REQUIRE(runtime.entity_velocity(0U, 0U));
+    CHECK(runtime.entity_position(0U, 0U)->x > 4.0F);
+    CHECK(runtime.entity_velocity(0U, 0U)->x == 6.0F);
+    CHECK(allocations.allocations == 0U);
+    CHECK(allocations.bytes == 0U);
+}
+
+TEST_CASE("Retained scene re-entry restores active contact identity without duplicate begin") {
+    const auto compiled = ai2d::compile_game_file(contact_course_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto pause = plan.scenes.front();
+    pause.symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+    plan.symbols.emplace_back("pause");
+    pause.max_contact_pairs = 0U;
+    pause.systems.clear();
+    pause.collision_rules.clear();
+    pause.rules.clear();
+    pause.ui.clear();
+    plan.scenes.push_back(std::move(pause));
+    plan.transitions.clear();
+    ai2d::SceneTransitionPlan leave{};
+    leave.from_scene = 0U;
+    leave.condition.kind = ai2d::TransitionConditionKind::action_pressed;
+    leave.condition.action = 0U;
+    leave.to_scene = 1U;
+    leave.reset_scene = false;
+    plan.transitions.push_back(leave);
+    auto return_to_course = leave;
+    return_to_course.from_scene = 1U;
+    return_to_course.to_scene = 0U;
+    plan.transitions.push_back(return_to_course);
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+    const auto entered = runtime.run_exact_actions(actions, 56U);
+    REQUIRE(entered);
+    CHECK(entered->collision.contact_begins == 1U);
+    const auto contact_checksum = runtime.contact_state_checksum();
+    CHECK(contact_checksum != 14'695'981'039'346'656'037ULL);
+
+    actions[0U].pressed = true;
+    const auto left = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(left);
+    CHECK(left->scene_changed);
+    CHECK(runtime.current_scene() == "pause");
+    actions[0U] = {};
+    REQUIRE(runtime.run_exact_actions(actions, 1U));
+    actions[0U].pressed = true;
+    const auto returned = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(returned);
+    CHECK(returned->scene_changed);
+    CHECK(runtime.current_scene() == "course");
+    CHECK(runtime.contact_state_checksum() == contact_checksum);
+
+    actions[0U] = {};
+    const auto persisted = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(persisted);
+    CHECK(persisted->collision.contact_begins == 0U);
+    CHECK(persisted->collision.contact_ends == 0U);
+    REQUIRE(runtime.state_value(0U));
+    CHECK(*runtime.state_value(0U) == 1);
+}
+
+TEST_CASE("reset_scene clears the active trigger contact set") {
+    const auto compiled = ai2d::compile_game_file(contact_course_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    plan.transitions.clear();
+    ai2d::SceneTransitionPlan reset{};
+    reset.from_scene = 0U;
+    reset.condition.kind = ai2d::TransitionConditionKind::action_pressed;
+    reset.condition.action = 0U;
+    reset.to_scene = 0U;
+    reset.reset_scene = true;
+    plan.transitions.push_back(reset);
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+    REQUIRE(runtime.run_exact_actions(actions, 56U));
+    CHECK(runtime.contact_state_checksum() != 14'695'981'039'346'656'037ULL);
+    actions[0U].pressed = true;
+    const auto reset_frame = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(reset_frame);
+    CHECK(reset_frame->scene_changed);
+    CHECK(runtime.contact_state_checksum() == 14'695'981'039'346'656'037ULL);
+}
+
+TEST_CASE("Direct moving pool contacts release endpoints and spawn at captured contact positions") {
+    const auto plan = ai2d::compile_game_file(pool_siege_manifest);
+    REQUIRE(plan);
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(*plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan->actions.size());
+    std::uint64_t contact_begins = 0U;
+    std::uint64_t pool_releases = 0U;
+    std::uint64_t acquire_successes = 0U;
+    std::uint64_t linear_updates = 0U;
+
+    bool frames_ok = true;
+    for (std::uint32_t tick = 0U; tick < 150U; ++tick) {
+        std::fill(actions.begin(), actions.end(), ai2d::GameActionInput{});
+        if (tick == 0U) actions[1U].pressed = true;
+        if (tick == 30U) actions[0U].pressed = true;
+        if (tick == 60U) actions[2U].pressed = true;
+        const auto frame = runtime.run_exact_actions(actions, 1U);
+        if (!frame) {
+            frames_ok = false;
+            break;
+        }
+        contact_begins += frame->collision.contact_begins;
+        pool_releases += frame->pool_releases;
+        acquire_successes += frame->pool_acquire_successes;
+        linear_updates += frame->linear_motion_updates;
+    }
+    REQUIRE(frames_ok);
+    CHECK(runtime.current_scene() == "win");
+    REQUIRE(runtime.state_value(0U));
+    CHECK(*runtime.state_value(0U) == 3);
+    CHECK(contact_begins == 3U);
+    CHECK(pool_releases == 6U);
+    // Three projectiles and the first two contact-position pickups acquire
+    // slots; the third pickup intentionally exercises the two-slot skip pool.
+    CHECK(acquire_successes == 5U);
+    CHECK(linear_updates > 400U);
+}
+
+TEST_CASE("Pool release and immediate reuse invalidates later contacts from the same collision batch") {
+    const auto compiled = ai2d::compile_game_file(pool_siege_manifest);
+    REQUIRE(compiled);
+    auto plan = *compiled;
+    auto& scene = plan.scenes[plan.start_scene];
+    scene.spawn_groups[1U].count = 1U;
+    scene.spawn_groups[1U].active_count = 1U;
+    scene.spawn_groups[1U].placement.origin = {};
+    scene.spawn_groups[1U].velocity.linear = {};
+    scene.spawn_groups[2U].count = 2U;
+    scene.spawn_groups[2U].active_count = 2U;
+    scene.spawn_groups[2U].placement.origin = {};
+    scene.spawn_groups[2U].placement.spacing = {};
+    scene.spawn_groups[2U].velocity.linear = {};
+    scene.total_spawn_count = 6U;
+    scene.collision_rules.resize(1U);
+    scene.rules.clear();
+    const auto symbol = static_cast<ai2d::SymbolId>(plan.symbols.size());
+    plan.symbols.emplace_back("release_reuse_contact_identity");
+    ai2d::GameRulePlan rule{};
+    rule.symbol = symbol;
+    rule.event.kind = ai2d::GameRuleEventKind::contact_begin;
+    rule.event.collision_rule_index = 0U;
+    ai2d::GameRuleActionPlan release{};
+    release.kind = ai2d::GameRuleActionKind::release_to_pool;
+    release.pool_index = 0U;
+    release.target.kind = ai2d::GameRuleTargetKind::collision_a;
+    rule.actions.push_back(release);
+    ai2d::GameRuleActionPlan respawn{};
+    respawn.kind = ai2d::GameRuleActionKind::spawn_from_pool;
+    respawn.pool_index = 0U;
+    respawn.pool_position_kind = ai2d::GamePoolSpawnPositionKind::constant;
+    respawn.pool_position = {};
+    rule.actions.push_back(respawn);
+    ai2d::GameRuleActionPlan score{};
+    score.kind = ai2d::GameRuleActionKind::add_int_state;
+    score.state_index = 0U;
+    score.value = 1;
+    rule.actions.push_back(score);
+    scene.rules.push_back(rule);
+    plan.transitions.clear();
+    plan.plan_hash = ai2d::compute_game_plan_hash(plan);
+    REQUIRE(ai2d::validate_game_plan(plan));
+
+    ai2d::GameRuntime runtime{};
+    ai2d::GameRuntimeOptions options{};
+    options.headless = true;
+    options.load_saved_settings = false;
+    REQUIRE(runtime.initialize(plan, options));
+    std::vector<ai2d::GameActionInput> actions(plan.actions.size());
+    const auto frame = runtime.run_exact_actions(actions, 1U);
+    REQUIRE(frame);
+    CHECK(frame->collision.contact_begins == 2U);
+    CHECK(frame->stale_contact_events == 1U);
+    CHECK(frame->rule_executions == 1U);
+    CHECK(frame->pool_releases == 1U);
+    CHECK(frame->pool_acquire_successes == 1U);
+    REQUIRE(runtime.state_value(0U));
+    CHECK(*runtime.state_value(0U) == 1);
 }

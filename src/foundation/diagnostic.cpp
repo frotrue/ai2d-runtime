@@ -50,6 +50,10 @@ std::string_view to_string(const DiagnosticCode code) noexcept {
     case DiagnosticCode::ir_invalid_bounds: return "IR_INVALID_BOUNDS";
     case DiagnosticCode::game_manifest_invalid: return "GAME_MANIFEST_INVALID";
     case DiagnosticCode::game_scene_invalid: return "GAME_SCENE_INVALID";
+    case DiagnosticCode::game_pool_invalid: return "GAME_POOL_INVALID";
+    case DiagnosticCode::game_collision_interaction_invalid: return "GAME_COLLISION_INTERACTION_INVALID";
+    case DiagnosticCode::game_test_assertion_failed: return "GAME_TEST_ASSERTION_FAILED";
+    case DiagnosticCode::game_test_nondeterministic: return "GAME_TEST_NONDETERMINISTIC";
     case DiagnosticCode::game_transition_invalid: return "GAME_TRANSITION_INVALID";
     case DiagnosticCode::asset_path_invalid: return "ASSET_PATH_INVALID";
     case DiagnosticCode::asset_missing: return "ASSET_MISSING";
@@ -59,9 +63,12 @@ std::string_view to_string(const DiagnosticCode code) noexcept {
     case DiagnosticCode::world_capacity_exceeded: return "WORLD_CAPACITY_EXCEEDED";
     case DiagnosticCode::world_structural_mutation_during_query: return "WORLD_STRUCTURAL_MUTATION_DURING_QUERY";
     case DiagnosticCode::runtime_numeric_state_invalid: return "RUNTIME_NUMERIC_STATE_INVALID";
+    case DiagnosticCode::runtime_pool_state_invalid: return "RUNTIME_POOL_STATE_INVALID";
+    case DiagnosticCode::runtime_contact_state_invalid: return "RUNTIME_CONTACT_STATE_INVALID";
     case DiagnosticCode::runtime_fixed_step_overrun: return "RUNTIME_FIXED_STEP_OVERRUN";
     case DiagnosticCode::collision_grid_capacity_exceeded: return "COLLISION_GRID_CAPACITY_EXCEEDED";
     case DiagnosticCode::collision_candidate_capacity_exceeded: return "COLLISION_CANDIDATE_CAPACITY_EXCEEDED";
+    case DiagnosticCode::collision_contact_capacity_exceeded: return "COLLISION_CONTACT_CAPACITY_EXCEEDED";
     case DiagnosticCode::collision_iteration_limit: return "COLLISION_ITERATION_LIMIT";
     case DiagnosticCode::audio_device_unavailable: return "AUDIO_DEVICE_UNAVAILABLE";
     case DiagnosticCode::audio_voice_capacity_exceeded: return "AUDIO_VOICE_CAPACITY_EXCEEDED";

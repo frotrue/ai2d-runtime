@@ -1,0 +1,10 @@
+{
+  "schema_version":"0.5","seed":515,"name":"Contact Course","organization":"ai2d","application":"contact_course",
+  "window":{"title":"Contact Course","width":960,"height":540,"virtual_width":960,"virtual_height":540,"default_fps":"60"},
+  "assets":[{"id":"sprites","kind":"png","path":"assets/sprites.png"},{"id":"font","kind":"font","path":"assets/font.png","metadata":"assets/font.json"}],
+  "actions":[{"id":"quit","keys":["escape"]}],
+  "states":[{"id":"begins","initial":0,"min":0,"max":10},{"id":"ends","initial":0,"min":0,"max":10}],
+  "scenes":[{"id":"course","path":"scenes/course.json"}],
+  "start_scene":"course",
+  "transitions":[{"from":"course","condition":{"kind":"action_pressed","action":"quit"},"to":"$quit"}]
+}

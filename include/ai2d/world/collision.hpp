@@ -15,6 +15,8 @@ namespace ai2d {
 class World;
 
 enum class CollisionTarget2D : std::uint8_t { a, b };
+enum class CollisionInteraction2D : std::uint8_t { legacy, solid, trigger };
+enum class CollisionEventPhase2D : std::uint8_t { collision, contact_begin, contact_end };
 enum class CollisionReactionKind2D : std::uint8_t {
     reflect,
     deactivate,
@@ -37,6 +39,7 @@ struct CollisionRule2D final {
 
     std::uint32_t group_a{0U};
     std::uint32_t group_b{0U};
+    CollisionInteraction2D interaction{CollisionInteraction2D::legacy};
     std::array<CollisionReaction2D, max_reactions> reactions{};
     std::uint32_t reaction_count{0U};
 };
@@ -47,6 +50,7 @@ struct CollisionGridConfig2D final {
     std::uint32_t max_colliders{10'000U};
     std::uint32_t max_grid_references{80'000U};
     std::uint32_t max_candidate_pairs{80'000U};
+    std::uint32_t max_contact_pairs{0U};
     std::uint32_t max_impacts_per_dynamic{4U};
 };
 
@@ -56,6 +60,17 @@ struct CollisionEvent2D final {
     EntityId entity_b{};
     Vec2 normal_for_a{};
     float time_of_impact{0.0F};
+    Vec2 position_a{};
+    Vec2 position_b{};
+    CollisionEventPhase2D phase{CollisionEventPhase2D::collision};
+};
+
+struct CollisionContactPair2D final {
+    std::uint32_t rule_index{0U};
+    EntityId entity_a{};
+    EntityId entity_b{};
+
+    [[nodiscard]] friend bool operator==(const CollisionContactPair2D&, const CollisionContactPair2D&) = default;
 };
 
 struct CollisionMetrics2D final {
@@ -65,10 +80,17 @@ struct CollisionMetrics2D final {
     std::uint32_t candidate_pairs{0U};
     std::uint32_t narrowphase_tests{0U};
     std::uint32_t contacts{0U};
+    std::uint32_t trigger_narrowphase_tests{0U};
+    std::uint32_t contact_begins{0U};
+    std::uint32_t contact_ends{0U};
+    std::uint32_t active_contact_pairs{0U};
+    std::uint32_t peak_contact_pairs{0U};
+    std::uint32_t motion_segments{0U};
     std::uint32_t toi_iterations{0U};
     std::uint32_t iteration_limit_hits{0U};
     std::uint32_t grid_reference_capacity{0U};
     std::uint32_t candidate_capacity{0U};
+    std::uint32_t contact_capacity{0U};
 };
 
 class CollisionGrid2D final {
@@ -86,6 +108,11 @@ public:
         std::span<const CollisionRule2D> rules,
         float delta_seconds);
     [[nodiscard]] std::span<const CollisionEvent2D> events() const noexcept;
+    [[nodiscard]] std::span<const CollisionContactPair2D> active_contact_pairs() const noexcept;
+    [[nodiscard]] Result<void> restore_contact_pairs(std::span<const CollisionContactPair2D> pairs);
+    void discard_contacts_for(EntityId entity) noexcept;
+    void clear_contacts() noexcept;
+    [[nodiscard]] std::uint64_t contact_state_checksum() const noexcept;
     [[nodiscard]] bool initialized() const noexcept;
 
 private:

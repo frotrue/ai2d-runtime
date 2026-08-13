@@ -1,0 +1,16 @@
+{
+  "schema_version":"0.5","seed":505,"name":"Pool Siege","organization":"ai2d","application":"pool_siege",
+  "window":{"title":"Pool Siege","width":960,"height":540,"virtual_width":960,"virtual_height":540,"default_fps":"60"},
+  "assets":[{"id":"sprites","kind":"png","path":"assets/sprites.png"},{"id":"font","kind":"font","path":"assets/font.png","metadata":"assets/font.json"}],
+  "actions":[{"id":"fire_low","keys":["down"]},{"id":"fire_mid","keys":["space"]},{"id":"fire_high","keys":["up"]},{"id":"restart","keys":["enter"]},{"id":"quit","keys":["escape"]}],
+  "states":[{"id":"score","initial":0,"min":0,"max":99},{"id":"health","initial":3,"min":0,"max":3},{"id":"bullet_spawned","initial":0,"min":0,"max":1},{"id":"item_spawned","initial":0,"min":0,"max":1}],
+  "scenes":[{"id":"play","path":"scenes/play.json"},{"id":"win","path":"scenes/win.json"},{"id":"lose","path":"scenes/lose.json"}],
+  "start_scene":"play",
+  "transitions":[
+    {"from":"play","condition":{"kind":"int_state_at_least","state":"score","value":3},"to":"win","reset_scene":true},
+    {"from":"play","condition":{"kind":"int_state_at_most","state":"health","value":0},"to":"lose","reset_scene":true},
+    {"from":"play","condition":{"kind":"action_pressed","action":"quit"},"to":"$quit"},
+    {"from":"win","condition":{"kind":"action_pressed","action":"restart"},"to":"play","reset_scene":true,"reset_session":true},
+    {"from":"lose","condition":{"kind":"action_pressed","action":"restart"},"to":"play","reset_scene":true,"reset_session":true}
+  ]
+}

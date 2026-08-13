@@ -1,0 +1,13 @@
+{
+  "schema_version":"1","frames":550,
+  "events":[{"tick":540,"action":"restart","kind":"tap"}],
+  "assertions":[
+    {"tick":0,"kind":"runtime_metric","metric":"active_pooled_entities","op":"eq","value":3},
+    {"tick":1,"kind":"runtime_metric","metric":"pool_lifetime_checks","op":"gt","value":0},
+    {"tick":538,"kind":"current_scene","scene":"lose"},
+    {"tick":538,"kind":"int_state","state":"health","op":"eq","value":0},
+    {"tick":540,"kind":"current_scene","scene":"play"},
+    {"tick":540,"kind":"int_state","state":"health","op":"eq","value":3},
+    {"tick":540,"kind":"group_active_count","scene":"play","group":"enemy_slots","op":"eq","value":3}
+  ]
+}

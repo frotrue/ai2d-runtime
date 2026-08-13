@@ -774,7 +774,7 @@ def input_schema_version(path: Path) -> str | None:
 
 
 def is_game_schema(path: Path) -> bool:
-    return input_schema_version(path) in {"0.2", "0.3"}
+    return input_schema_version(path) in {"0.2", "0.3", "0.4", "0.5"}
 
 
 def forward_runtime(
@@ -862,7 +862,7 @@ def command_run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
                         "INPUT_INVALID",
                         "error",
                         "cli",
-                        "--input-script is supported only for GameManifest 0.2 or 0.3",
+                        "--input-script is supported only for GameManifest 0.2 through 0.5",
                         context={"input": str(arguments.scenario)},
                     )
                 ],
@@ -879,6 +879,30 @@ def command_validate(arguments: argparse.Namespace) -> tuple[dict[str, Any], int
     if is_game_schema(arguments.scenario):
         return forward_runtime("game", arguments, ["validate", str(arguments.scenario)])
     return forward_runtime("validate", arguments, [str(arguments.scenario)])
+
+
+def command_verify(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    if not is_game_schema(arguments.manifest):
+        return (
+            envelope(
+                "verify",
+                "fail",
+                diagnostics=[diagnostic(
+                    "INPUT_INVALID", "error", "cli", "verify requires a supported GameManifest",
+                    context={"manifest": str(arguments.manifest)},
+                )],
+            ),
+            EXIT_INVALID,
+        )
+    runtime_arguments = [
+        "verify", str(arguments.manifest), "--test-script", str(arguments.test_script),
+        "--repeat", str(arguments.repeat),
+    ]
+    if arguments.offscreen:
+        runtime_arguments.append("--offscreen")
+    if arguments.hidden:
+        runtime_arguments.append("--hidden")
+    return forward_runtime("game", arguments, runtime_arguments)
 
 
 def command_inspect(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
@@ -1172,7 +1196,7 @@ def command_package(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]
                         "COMMAND_UNAVAILABLE",
                         "error",
                         "package",
-                        "The v0.3 package target currently supports Windows x64 only",
+                        "The v0.5 package target currently supports Windows x64 only",
                         context={"os": os.name},
                     )
                 ],
@@ -1191,7 +1215,7 @@ def command_package(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]
                         "INPUT_INVALID",
                         "error",
                         "package",
-                        "Package input must be a readable GameManifest 0.2 or 0.3 file",
+                        "Package input must be a readable GameManifest 0.2 through 0.5 file",
                         context={"manifest": str(manifest)},
                     )
                 ],
@@ -1261,7 +1285,7 @@ def command_package(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]
     dependencies = metrics.get("dependencies")
     inspected_assets = metrics.get("assets")
     windows_reserved_names = {"CON", "PRN", "AUX", "NUL", *(f"COM{index}" for index in range(1, 10)), *(f"LPT{index}" for index in range(1, 10))}
-    if schema not in {"0.2", "0.3"} or not isinstance(application, str) or not re.fullmatch(
+    if schema not in {"0.2", "0.3", "0.4", "0.5"} or not isinstance(application, str) or not re.fullmatch(
         r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", application
     ) or application.split(".", 1)[0].upper() in windows_reserved_names:
         return (
@@ -1524,7 +1548,7 @@ def command_package(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
         (staging / "README.txt").write_text(
-            "AI2D v0.3 portable Windows package\n\n"
+            "AI2D v0.5 portable Windows package\n\n"
             f"Run {application}.exe from this directory.\n"
             "The content directory must remain beside the executable.\n"
             "A Vulkan 1.3-capable GPU, current vendor driver, and system Vulkan loader are required.\n"
@@ -1931,6 +1955,16 @@ def create_parser() -> argparse.ArgumentParser:
     validate.add_argument("--preset", default="dev")
     add_common_json(validate)
     validate.set_defaults(handler=command_validate)
+
+    verify = subparsers.add_parser("verify", help="Run deterministic game-test-v1 assertions")
+    verify.add_argument("manifest", type=Path)
+    verify.add_argument("--test-script", type=Path, required=True)
+    verify.add_argument("--repeat", type=int, choices=range(1, 17), default=2)
+    verify.add_argument("--offscreen", action="store_true")
+    verify.add_argument("--hidden", action="store_true")
+    verify.add_argument("--preset", default="dev")
+    add_common_json(verify)
+    verify.set_defaults(handler=command_verify)
 
     inspect = subparsers.add_parser("inspect")
     inspect.add_argument("kind", choices=("capabilities", "plan", "scenario", "diagnostics-schema"))

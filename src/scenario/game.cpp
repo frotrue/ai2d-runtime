@@ -504,7 +504,9 @@ Result<GameSchemaVersion> parse_game_schema_version(
     const std::string_view pointer,
     const DiagnosticCode code) {
     if (value == GamePlan::legacy_schema_version) return GameSchemaVersion::v0_2;
-    if (value == GamePlan::supported_schema_version) return GameSchemaVersion::v0_3;
+    if (value == GamePlan::event_action_schema_version) return GameSchemaVersion::v0_3;
+    if (value == GamePlan::object_pool_schema_version) return GameSchemaVersion::v0_4;
+    if (value == GamePlan::supported_schema_version) return GameSchemaVersion::v0_5;
     return std::unexpected(game_error(code, "Unsupported game schema version", source, pointer));
 }
 
@@ -803,6 +805,7 @@ Result<GameSpawnGroupPlan> parse_spawn_group(
     const Json& object,
     const std::size_t index,
     const bool version_0_3,
+    const bool version_0_5,
     const std::unordered_map<std::string, std::uint32_t>& assets,
     const std::vector<GameAssetPlan>& asset_plans,
     Symbols& symbols,
@@ -927,8 +930,18 @@ Result<GameSpawnGroupPlan> parse_spawn_group(
         plan.has_sprite = true;
     }
     if (const auto* collider = optional(object, "collider"); collider != nullptr) {
+        if (version_0_5 && optional(*collider, "trigger") != nullptr) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_collision_interaction_invalid,
+                "SceneSpec 0.5 uses collision rule interaction instead of collider.trigger", source,
+                pointer + "/collider/trigger"));
+        }
         if (auto rejected = reject_unknown(
-                *collider, {"offset", "half_extent", "group", "body", "trigger", "enabled"}, source,
+                *collider,
+                version_0_5
+                    ? std::initializer_list<std::string_view>{"offset", "half_extent", "group", "body", "enabled"}
+                    : std::initializer_list<std::string_view>{"offset", "half_extent", "group", "body", "trigger", "enabled"},
+                source,
                 pointer + "/collider", DiagnosticCode::game_scene_invalid);
             !rejected) {
             return std::unexpected(std::move(rejected.error()));
@@ -973,6 +986,7 @@ Result<GameSystemPlan> parse_system(
     const Json& object,
     const std::size_t index,
     const bool version_0_3,
+    const bool version_0_5,
     const std::unordered_map<std::string, std::uint32_t>& actions,
     const std::unordered_map<std::string, std::uint32_t>& spawn_groups,
     const std::unordered_map<std::string, std::uint32_t>& grids,
@@ -987,7 +1001,7 @@ Result<GameSystemPlan> parse_system(
                 ? std::initializer_list<std::string_view>{
                       "id", "operation", "group", "negative_action", "positive_action", "action", "speed", "min",
                       "max", "velocity", "grid", "step_interval_ticks", "initial_direction", "prevent_reverse",
-                      "leader", "followers", "motion_system"}
+                      "leader", "followers", "motion_system", "spawn_group"}
                 : std::initializer_list<std::string_view>{
                       "id", "operation", "group", "negative_action", "positive_action", "action", "speed", "min",
                       "max", "velocity"},
@@ -1008,7 +1022,7 @@ Result<GameSystemPlan> parse_system(
         for (const auto field : {
                  "group", "negative_action", "positive_action", "action", "speed", "min", "max", "velocity",
                  "grid", "step_interval_ticks", "initial_direction", "prevent_reverse", "leader", "followers",
-                 "motion_system"}) {
+                 "motion_system", "spawn_group"}) {
             if (!is_allowed(field) && optional(object, field) != nullptr) {
                 return std::unexpected(game_error(
                     DiagnosticCode::game_scene_invalid, "Field is not valid for this system operation", source,
@@ -1163,6 +1177,18 @@ Result<GameSystemPlan> parse_system(
         plan.leader_group_index = *leader_index;
         plan.follower_group_index = *follower_index;
         plan.motion_system_index = *motion_index;
+    } else if (version_0_5 && *operation == "linear_motion") {
+        if (auto checked = reject_operation_parameters({"spawn_group"}); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        plan.operation = GameOperationId::linear_motion;
+        auto group = string_value(object, "spawn_group", source, pointer, DiagnosticCode::game_scene_invalid);
+        if (!group) return std::unexpected(std::move(group.error()));
+        auto group_index = index_by_name(
+            spawn_groups, *group, "spawn group", source, pointer + "/spawn_group",
+            DiagnosticCode::game_scene_invalid);
+        if (!group_index) return std::unexpected(std::move(group_index.error()));
+        plan.spawn_group_index = *group_index;
     } else {
         return std::unexpected(game_error(
             DiagnosticCode::game_scene_invalid, "Unsupported scene operation", source, pointer + "/operation"));
@@ -1280,6 +1306,7 @@ Result<GameCollisionRulePlan> parse_collision_rule(
     const Json& object,
     const std::size_t index,
     const bool version_0_3,
+    const bool version_0_5,
     const std::unordered_map<std::string, std::uint32_t>& states,
     const std::unordered_map<std::string, std::uint32_t>& assets,
     const std::vector<GameAssetPlan>& asset_plans,
@@ -1288,7 +1315,8 @@ Result<GameCollisionRulePlan> parse_collision_rule(
     const auto pointer = "/collision_rules/" + std::to_string(index);
     if (auto rejected = reject_unknown(
             object,
-            version_0_3 ? std::initializer_list<std::string_view>{"id", "a", "b", "reactions"}
+            version_0_5 ? std::initializer_list<std::string_view>{"id", "a", "b", "interaction", "reactions"}
+                        : version_0_3 ? std::initializer_list<std::string_view>{"id", "a", "b", "reactions"}
                         : std::initializer_list<std::string_view>{"a", "b", "reactions"},
             source, pointer, DiagnosticCode::game_scene_invalid);
         !rejected) {
@@ -1320,6 +1348,18 @@ Result<GameCollisionRulePlan> parse_collision_rule(
     }
     plan.group_a = symbols.intern(std::move(*a));
     plan.group_b = symbols.intern(std::move(*b));
+    if (version_0_5) {
+        auto interaction = string_value(
+            object, "interaction", source, pointer, DiagnosticCode::game_collision_interaction_invalid);
+        if (!interaction) return std::unexpected(std::move(interaction.error()));
+        if (*interaction == "solid") plan.interaction = GameCollisionInteraction::solid;
+        else if (*interaction == "trigger") plan.interaction = GameCollisionInteraction::trigger;
+        else {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_collision_interaction_invalid,
+                "Collision interaction must be solid or trigger", source, pointer + "/interaction"));
+        }
+    }
     plan.reactions.reserve((*reactions)->size());
     for (std::size_t reaction_index = 0U; reaction_index < (*reactions)->size(); ++reaction_index) {
         auto reaction = parse_reaction(
@@ -1332,6 +1372,19 @@ Result<GameCollisionRulePlan> parse_collision_rule(
             source);
         if (!reaction) return std::unexpected(std::move(reaction.error()));
         plan.reactions.push_back(*reaction);
+    }
+    if (version_0_5 && plan.interaction == GameCollisionInteraction::trigger && !plan.reactions.empty()) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_collision_interaction_invalid,
+            "Trigger collision rules require an empty reactions array", source, pointer + "/reactions"));
+    }
+    if (version_0_5 && plan.interaction == GameCollisionInteraction::solid &&
+        std::none_of(plan.reactions.begin(), plan.reactions.end(), [](const GameReactionPlan& reaction) {
+            return reaction.kind == GameReactionKind::reflect;
+        })) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_collision_interaction_invalid,
+            "Solid collision rules require at least one reflect reaction", source, pointer + "/reactions"));
     }
     return plan;
 }
@@ -1382,54 +1435,91 @@ Result<GameGridPlan> parse_grid(
     return plan;
 }
 
+Result<GamePoolPlan> parse_pool(
+    const Json& object,
+    const std::size_t index,
+    const std::unordered_map<std::string, std::uint32_t>& spawn_groups,
+    Symbols& symbols,
+    const std::string_view source) {
+    const auto pointer = "/pools/" + std::to_string(index);
+    if (auto rejected = reject_unknown(
+            object, {"id", "group", "on_exhausted"}, source, pointer,
+            DiagnosticCode::game_pool_invalid);
+        !rejected) {
+        return std::unexpected(std::move(rejected.error()));
+    }
+    auto id = string_value(object, "id", source, pointer, DiagnosticCode::game_pool_invalid);
+    if (!id) return std::unexpected(std::move(id.error()));
+    auto group = string_value(object, "group", source, pointer, DiagnosticCode::game_pool_invalid);
+    if (!group) return std::unexpected(std::move(group.error()));
+    auto group_index = index_by_name(
+        spawn_groups, *group, "spawn group", source, pointer + "/group",
+        DiagnosticCode::game_pool_invalid);
+    if (!group_index) return std::unexpected(std::move(group_index.error()));
+    auto policy = string_value(object, "on_exhausted", source, pointer, DiagnosticCode::game_pool_invalid);
+    if (!policy) return std::unexpected(std::move(policy.error()));
+    GamePoolExhaustionPolicy parsed_policy{};
+    if (*policy == "skip") {
+        parsed_policy = GamePoolExhaustionPolicy::skip;
+    } else if (*policy == "recycle_oldest") {
+        parsed_policy = GamePoolExhaustionPolicy::recycle_oldest;
+    } else {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_pool_invalid,
+            "Pool on_exhausted must be skip or recycle_oldest", source, pointer + "/on_exhausted"));
+    }
+    return GamePoolPlan{symbols.intern(std::move(*id)), *group_index, parsed_policy};
+}
+
 Result<GameRuleTargetPlan> parse_rule_target(
     const Json& object,
     const std::string_view pointer,
     const std::unordered_map<std::string, std::uint32_t>& spawn_groups,
     const std::vector<GameSpawnGroupPlan>& spawn_plans,
     const bool collision_context,
-    const std::string_view source) {
+    const std::string_view source,
+    const DiagnosticCode diagnostic_code) {
     if (auto rejected = reject_unknown(
-            object, {"kind", "group", "index"}, source, pointer, DiagnosticCode::game_scene_invalid);
+            object, {"kind", "group", "index"}, source, pointer, diagnostic_code);
         !rejected) {
         return std::unexpected(std::move(rejected.error()));
     }
-    auto kind = string_value(object, "kind", source, pointer, DiagnosticCode::game_scene_invalid);
+    auto kind = string_value(object, "kind", source, pointer, diagnostic_code);
     if (!kind) return std::unexpected(std::move(kind.error()));
     GameRuleTargetPlan target{};
     if (*kind == "group" || *kind == "index") {
-        auto group = string_value(object, "group", source, pointer, DiagnosticCode::game_scene_invalid);
+        auto group = string_value(object, "group", source, pointer, diagnostic_code);
         if (!group) return std::unexpected(std::move(group.error()));
         auto group_index = index_by_name(
             spawn_groups, *group, "spawn group", source, std::string{pointer} + "/group",
-            DiagnosticCode::game_scene_invalid);
+            diagnostic_code);
         if (!group_index) return std::unexpected(std::move(group_index.error()));
         target.kind = *kind == "group" ? GameRuleTargetKind::spawn_group : GameRuleTargetKind::spawn_index;
         target.spawn_group_index = *group_index;
         if (*kind == "index") {
             auto item = u32_value(
                 object, "index", 0U, spawn_plans[*group_index].count - 1U, source, pointer,
-                DiagnosticCode::game_scene_invalid);
+                diagnostic_code);
             if (!item) return std::unexpected(std::move(item.error()));
             target.item_index = *item;
         } else if (optional(object, "index") != nullptr) {
             return std::unexpected(game_error(
-                DiagnosticCode::game_scene_invalid, "Group target does not accept index", source,
+                diagnostic_code, "Group target does not accept index", source,
                 std::string{pointer} + "/index"));
         }
     } else if (*kind == "collision_a" || *kind == "collision_b") {
         if (!collision_context) {
             return std::unexpected(game_error(
-                DiagnosticCode::game_scene_invalid, "Collision targets require a collision event", source, pointer));
+                diagnostic_code, "Collision targets require a collision event", source, pointer));
         }
         if (optional(object, "group") != nullptr || optional(object, "index") != nullptr) {
             return std::unexpected(game_error(
-                DiagnosticCode::game_scene_invalid, "Collision target does not accept group or index", source, pointer));
+                diagnostic_code, "Collision target does not accept group or index", source, pointer));
         }
         target.kind = *kind == "collision_a" ? GameRuleTargetKind::collision_a : GameRuleTargetKind::collision_b;
     } else {
         return std::unexpected(game_error(
-            DiagnosticCode::game_scene_invalid, "Unsupported rule target kind", source,
+            diagnostic_code, "Unsupported rule target kind", source,
             std::string{pointer} + "/kind"));
     }
     return target;
@@ -1440,6 +1530,8 @@ Result<GameRuleEventPlan> parse_rule_event(
     const std::string_view pointer,
     const std::unordered_map<std::string, std::uint32_t>& actions,
     const std::unordered_map<std::string, std::uint32_t>& collision_rules,
+    const std::vector<GameCollisionRulePlan>& collision_rule_plans,
+    const bool version_0_5,
     const std::string_view source) {
     if (auto rejected = reject_unknown(
             object, {"kind", "action", "interval_ticks", "rule"}, source, pointer,
@@ -1469,8 +1561,15 @@ Result<GameRuleEventPlan> parse_rule_event(
             DiagnosticCode::game_scene_invalid);
         if (!interval) return std::unexpected(std::move(interval.error()));
         event.interval_ticks = *interval;
-    } else if (*kind == "collision") {
-        event.kind = GameRuleEventKind::collision;
+    } else if (*kind == "collision" || *kind == "contact_begin" || *kind == "contact_end") {
+        if ((*kind == "contact_begin" || *kind == "contact_end") && !version_0_5) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_scene_invalid, "Contact events require SceneSpec 0.5", source,
+                std::string{pointer} + "/kind"));
+        }
+        event.kind = *kind == "collision" ? GameRuleEventKind::collision
+                   : *kind == "contact_begin" ? GameRuleEventKind::contact_begin
+                                               : GameRuleEventKind::contact_end;
         auto rule = string_value(object, "rule", source, pointer, DiagnosticCode::game_scene_invalid);
         if (!rule) return std::unexpected(std::move(rule.error()));
         auto index = index_by_name(
@@ -1478,6 +1577,16 @@ Result<GameRuleEventPlan> parse_rule_event(
             DiagnosticCode::game_scene_invalid);
         if (!index) return std::unexpected(std::move(index.error()));
         event.collision_rule_index = *index;
+        const auto interaction = collision_rule_plans[*index].interaction;
+        if ((event.kind == GameRuleEventKind::collision && version_0_5 &&
+             interaction != GameCollisionInteraction::solid) ||
+            ((event.kind == GameRuleEventKind::contact_begin || event.kind == GameRuleEventKind::contact_end) &&
+             interaction != GameCollisionInteraction::trigger)) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_collision_interaction_invalid,
+                "Rule event kind does not match the collision interaction", source,
+                std::string{pointer} + "/rule"));
+        }
     } else {
         return std::unexpected(game_error(
             DiagnosticCode::game_scene_invalid, "Unsupported rule event kind", source,
@@ -1488,7 +1597,9 @@ Result<GameRuleEventPlan> parse_rule_event(
     for (const auto& [field, allowed] : {
              std::pair<std::string_view, bool>{"action", action_event},
              {"interval_ticks", event.kind == GameRuleEventKind::fixed_interval},
-             {"rule", event.kind == GameRuleEventKind::collision},
+             {"rule", event.kind == GameRuleEventKind::collision ||
+                          event.kind == GameRuleEventKind::contact_begin ||
+                          event.kind == GameRuleEventKind::contact_end},
          }) {
         if (!allowed && optional(object, field) != nullptr) {
             return std::unexpected(game_error(
@@ -1574,6 +1685,8 @@ Result<GameRuleActionPlan> parse_rule_action(
     const std::vector<IntStatePlan>& state_plans,
     const std::unordered_map<std::string, std::uint32_t>& spawn_groups,
     const std::vector<GameSpawnGroupPlan>& spawn_plans,
+    const std::unordered_map<std::string, std::uint32_t>& pools,
+    const std::vector<GamePoolPlan>& pool_plans,
     const std::unordered_map<std::string, std::uint32_t>& grids,
     const std::unordered_map<std::string, std::uint32_t>& systems,
     const std::vector<GameSystemPlan>& system_plans,
@@ -1584,7 +1697,8 @@ Result<GameRuleActionPlan> parse_rule_action(
     if (auto rejected = reject_unknown(
             object,
             {"kind", "state", "value", "target", "group", "count", "velocity", "system", "direction",
-             "asset", "grid", "occupied_groups", "result_state"},
+             "asset", "grid", "occupied_groups", "result_state", "pool", "position", "rotation",
+             "lifetime_ticks"},
             source, pointer, DiagnosticCode::game_scene_invalid);
         !rejected) {
         return std::unexpected(std::move(rejected.error()));
@@ -1592,17 +1706,22 @@ Result<GameRuleActionPlan> parse_rule_action(
     auto kind = string_value(object, "kind", source, pointer, DiagnosticCode::game_scene_invalid);
     if (!kind) return std::unexpected(std::move(kind.error()));
     GameRuleActionPlan action{};
-    const bool collision_context = event.kind == GameRuleEventKind::collision;
-    const auto reject_action_parameters = [&](const std::initializer_list<std::string_view> allowed) -> Result<void> {
+    const bool collision_context = event.kind == GameRuleEventKind::collision ||
+                                   event.kind == GameRuleEventKind::contact_begin ||
+                                   event.kind == GameRuleEventKind::contact_end;
+    const auto reject_action_parameters = [&](
+        const std::initializer_list<std::string_view> allowed,
+        const DiagnosticCode diagnostic_code = DiagnosticCode::game_scene_invalid) -> Result<void> {
         const auto is_allowed = [&](const std::string_view field) {
             return field == "kind" || std::find(allowed.begin(), allowed.end(), field) != allowed.end();
         };
         for (const auto field : {
                  "state", "value", "target", "group", "count", "velocity", "system", "direction", "asset",
-                 "grid", "occupied_groups", "result_state"}) {
+                 "grid", "occupied_groups", "result_state", "pool", "position", "rotation",
+                 "lifetime_ticks"}) {
             if (!is_allowed(field) && optional(object, field) != nullptr) {
                 return std::unexpected(game_error(
-                    DiagnosticCode::game_scene_invalid, "Field is not valid for this rule action", source,
+                    diagnostic_code, "Field is not valid for this rule action", source,
                     std::string{pointer} + "/" + field));
             }
         }
@@ -1619,7 +1738,31 @@ Result<GameRuleActionPlan> parse_rule_action(
         auto member = required(object, "target", source, pointer, DiagnosticCode::game_scene_invalid);
         if (!member) return std::unexpected(std::move(member.error()));
         return parse_rule_target(
-            **member, std::string{pointer} + "/target", spawn_groups, spawn_plans, collision_context, source);
+            **member, std::string{pointer} + "/target", spawn_groups, spawn_plans, collision_context, source,
+            DiagnosticCode::game_scene_invalid);
+    };
+    const auto parse_pool_reference = [&]() -> Result<std::uint32_t> {
+        auto pool = string_value(object, "pool", source, pointer, DiagnosticCode::game_pool_invalid);
+        if (!pool) return std::unexpected(std::move(pool.error()));
+        return index_by_name(
+            pools, *pool, "pool", source, std::string{pointer} + "/pool", DiagnosticCode::game_pool_invalid);
+    };
+    const auto parse_optional_result_state = [&]() -> Result<void> {
+        if (optional(object, "result_state") == nullptr) return {};
+        auto state = string_value(object, "result_state", source, pointer, DiagnosticCode::game_pool_invalid);
+        if (!state) return std::unexpected(std::move(state.error()));
+        auto state_index = index_by_name(
+            states, *state, "integer state", source, std::string{pointer} + "/result_state",
+            DiagnosticCode::game_pool_invalid);
+        if (!state_index) return std::unexpected(std::move(state_index.error()));
+        if (state_plans[*state_index].minimum > 0 || state_plans[*state_index].maximum < 1) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_pool_invalid, "result_state range must contain zero and one", source,
+                std::string{pointer} + "/result_state"));
+        }
+        action.has_result_state = true;
+        action.result_state_index = *state_index;
+        return {};
     };
     if (*kind == "set_int_state" || *kind == "add_int_state") {
         if (auto checked = reject_action_parameters({"state", "value"}); !checked) {
@@ -1852,6 +1995,155 @@ Result<GameRuleActionPlan> parse_rule_action(
             action.has_result_state = true;
             action.result_state_index = *state_index;
         }
+    } else if (*kind == "spawn_from_pool") {
+        if (auto checked = reject_action_parameters(
+                {"pool", "position", "velocity", "rotation", "lifetime_ticks", "result_state"},
+                DiagnosticCode::game_pool_invalid);
+            !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        action.kind = GameRuleActionKind::spawn_from_pool;
+        auto pool_index = parse_pool_reference();
+        if (!pool_index) return std::unexpected(std::move(pool_index.error()));
+        action.pool_index = *pool_index;
+        const auto& pool = pool_plans[*pool_index];
+        const auto& pool_group = spawn_plans[pool.spawn_group_index];
+        auto position_member = required(
+            object, "position", source, pointer, DiagnosticCode::game_pool_invalid);
+        if (!position_member) return std::unexpected(std::move(position_member.error()));
+        const auto position_pointer = std::string{pointer} + "/position";
+        if (auto rejected = reject_unknown(
+                **position_member, {"kind", "value", "target", "offset"}, source, position_pointer,
+                DiagnosticCode::game_pool_invalid);
+            !rejected) {
+            return std::unexpected(std::move(rejected.error()));
+        }
+        auto position_kind = string_value(
+            **position_member, "kind", source, position_pointer, DiagnosticCode::game_pool_invalid);
+        if (!position_kind) return std::unexpected(std::move(position_kind.error()));
+        auto offset = optional_vec2(
+            **position_member, "offset", {}, source, position_pointer, DiagnosticCode::game_pool_invalid);
+        if (!offset) return std::unexpected(std::move(offset.error()));
+        action.pool_position_offset = *offset;
+        if (*position_kind == "initial") {
+            action.pool_position_kind = GamePoolSpawnPositionKind::initial;
+            if (optional(**position_member, "value") != nullptr || optional(**position_member, "target") != nullptr) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_pool_invalid, "initial position accepts only an optional offset", source,
+                    position_pointer));
+            }
+        } else if (*position_kind == "constant") {
+            action.pool_position_kind = GamePoolSpawnPositionKind::constant;
+            auto value = required(
+                **position_member, "value", source, position_pointer, DiagnosticCode::game_pool_invalid);
+            if (!value) return std::unexpected(std::move(value.error()));
+            auto parsed = vec2(**value, source, position_pointer + "/value", DiagnosticCode::game_pool_invalid);
+            if (!parsed) return std::unexpected(std::move(parsed.error()));
+            action.pool_position = *parsed;
+            if (optional(**position_member, "target") != nullptr) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_pool_invalid, "constant position does not accept target", source,
+                    position_pointer + "/target"));
+            }
+        } else if (*position_kind == "target") {
+            action.pool_position_kind = GamePoolSpawnPositionKind::target;
+            auto target_member = required(
+                **position_member, "target", source, position_pointer, DiagnosticCode::game_pool_invalid);
+            if (!target_member) return std::unexpected(std::move(target_member.error()));
+            auto target = parse_rule_target(
+                **target_member, position_pointer + "/target", spawn_groups, spawn_plans,
+                collision_context, source, DiagnosticCode::game_pool_invalid);
+            if (!target) return std::unexpected(std::move(target.error()));
+            if (target->kind == GameRuleTargetKind::spawn_group) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_pool_invalid,
+                    "Pool spawn position target must be a fixed index or collision endpoint", source,
+                    position_pointer + "/target"));
+            }
+            action.pool_position_target = *target;
+            if (optional(**position_member, "value") != nullptr) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_pool_invalid, "target position does not accept value", source,
+                    position_pointer + "/value"));
+            }
+        } else {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_pool_invalid,
+                "Pool spawn position kind must be initial, constant, or target", source,
+                position_pointer + "/kind"));
+        }
+        if (optional(object, "velocity") != nullptr) {
+            if (!pool_group.has_velocity) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_pool_invalid,
+                    "Pool velocity override requires Velocity2D on every slot", source,
+                    std::string{pointer} + "/velocity"));
+            }
+            auto parsed = vec2(
+                *optional(object, "velocity"), source, std::string{pointer} + "/velocity",
+                DiagnosticCode::game_pool_invalid);
+            if (!parsed) return std::unexpected(std::move(parsed.error()));
+            action.has_velocity_override = true;
+            action.velocity = *parsed;
+        }
+        if (const auto* rotation = optional(object, "rotation"); rotation != nullptr) {
+            auto parsed = number(
+                *rotation, source, std::string{pointer} + "/rotation", DiagnosticCode::game_pool_invalid);
+            if (!parsed) return std::unexpected(std::move(parsed.error()));
+            action.has_rotation_override = true;
+            action.rotation = *parsed;
+        }
+        if (optional(object, "lifetime_ticks") != nullptr) {
+            auto lifetime = u32_value(
+                object, "lifetime_ticks", 1U, 1'000'000U, source, pointer,
+                DiagnosticCode::game_pool_invalid);
+            if (!lifetime) return std::unexpected(std::move(lifetime.error()));
+            action.has_lifetime = true;
+            action.lifetime_ticks = *lifetime;
+        }
+        if (auto result = parse_optional_result_state(); !result) {
+            return std::unexpected(std::move(result.error()));
+        }
+    } else if (*kind == "release_to_pool") {
+        if (auto checked = reject_action_parameters(
+                {"pool", "target", "result_state"}, DiagnosticCode::game_pool_invalid);
+            !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        action.kind = GameRuleActionKind::release_to_pool;
+        auto pool_index = parse_pool_reference();
+        if (!pool_index) return std::unexpected(std::move(pool_index.error()));
+        action.pool_index = *pool_index;
+        auto target_member = required(object, "target", source, pointer, DiagnosticCode::game_pool_invalid);
+        if (!target_member) return std::unexpected(std::move(target_member.error()));
+        auto target = parse_rule_target(
+            **target_member, std::string{pointer} + "/target", spawn_groups, spawn_plans,
+            collision_context, source, DiagnosticCode::game_pool_invalid);
+        if (!target) return std::unexpected(std::move(target.error()));
+        if (target->kind == GameRuleTargetKind::spawn_group) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_pool_invalid,
+                "release_to_pool target must be a fixed index or collision endpoint", source,
+                std::string{pointer} + "/target"));
+        }
+        if (target->kind == GameRuleTargetKind::spawn_index &&
+            target->spawn_group_index != pool_plans[*pool_index].spawn_group_index) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_pool_invalid, "release_to_pool index target is not owned by the pool", source,
+                std::string{pointer} + "/target"));
+        }
+        action.target = *target;
+        if (auto result = parse_optional_result_state(); !result) {
+            return std::unexpected(std::move(result.error()));
+        }
+    } else if (*kind == "reset_pool") {
+        if (auto checked = reject_action_parameters({"pool"}, DiagnosticCode::game_pool_invalid); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        action.kind = GameRuleActionKind::reset_pool;
+        auto pool_index = parse_pool_reference();
+        if (!pool_index) return std::unexpected(std::move(pool_index.error()));
+        action.pool_index = *pool_index;
     } else {
         return std::unexpected(game_error(
             DiagnosticCode::game_scene_invalid, "Unsupported rule action kind", source,
@@ -1868,11 +2160,14 @@ Result<GameRulePlan> parse_game_rule(
     const std::vector<IntStatePlan>& state_plans,
     const std::unordered_map<std::string, std::uint32_t>& spawn_groups,
     const std::vector<GameSpawnGroupPlan>& spawn_plans,
+    const std::unordered_map<std::string, std::uint32_t>& pools,
+    const std::vector<GamePoolPlan>& pool_plans,
     const std::unordered_map<std::string, std::uint32_t>& grids,
     const std::unordered_map<std::string, std::uint32_t>& systems,
     const std::vector<GameSystemPlan>& system_plans,
     const std::unordered_map<std::string, std::uint32_t>& collision_rules,
     const std::vector<GameCollisionRulePlan>& collision_rule_plans,
+    const bool version_0_5,
     const std::unordered_map<std::string, std::uint32_t>& assets,
     const std::vector<GameAssetPlan>& asset_plans,
     Symbols& symbols,
@@ -1889,7 +2184,7 @@ Result<GameRulePlan> parse_game_rule(
     auto event_member = required(object, "event", source, pointer, DiagnosticCode::game_scene_invalid);
     if (!event_member) return std::unexpected(std::move(event_member.error()));
     auto event = parse_rule_event(
-        **event_member, pointer + "/event", actions, collision_rules, source);
+        **event_member, pointer + "/event", actions, collision_rules, collision_rule_plans, version_0_5, source);
     if (!event) return std::unexpected(std::move(event.error()));
     auto action_members = required(object, "actions", source, pointer, DiagnosticCode::game_scene_invalid);
     if (!action_members) return std::unexpected(std::move(action_members.error()));
@@ -1921,7 +2216,8 @@ Result<GameRulePlan> parse_game_rule(
     for (std::size_t action_index = 0U; action_index < (*action_members)->size(); ++action_index) {
         auto action = parse_rule_action(
             (**action_members)[action_index], pointer + "/actions/" + std::to_string(action_index), plan.event,
-            states, state_plans, spawn_groups, spawn_plans, grids, systems, system_plans, collision_rule_plans,
+            states, state_plans, spawn_groups, spawn_plans, pools, pool_plans, grids, systems, system_plans,
+            collision_rule_plans,
             assets, asset_plans,
             source);
         if (!action) return std::unexpected(std::move(action.error()));
@@ -2048,10 +2344,17 @@ Result<GameScenePlan> parse_scene(
     const std::vector<GameAssetPlan>& asset_plans,
     Symbols& symbols) {
     const auto source = source_path.string();
-    const bool version_0_3 = expected_version == GameSchemaVersion::v0_3;
+    const bool version_0_3 = expected_version != GameSchemaVersion::v0_2;
+    const bool version_0_4 = expected_version == GameSchemaVersion::v0_4 ||
+                             expected_version == GameSchemaVersion::v0_5;
+    const bool version_0_5 = expected_version == GameSchemaVersion::v0_5;
     if (auto rejected = reject_unknown(
             document,
-            version_0_3
+            version_0_4
+                ? std::initializer_list<std::string_view>{
+                      "schema_version", "id", "world", "camera", "collision", "grids", "spawn_groups", "pools",
+                      "systems", "collision_rules", "rules", "ui"}
+                : version_0_3
                 ? std::initializer_list<std::string_view>{
                       "schema_version", "id", "world", "camera", "collision", "grids", "spawn_groups", "systems",
                       "collision_rules", "rules", "ui"}
@@ -2116,7 +2419,13 @@ Result<GameScenePlan> parse_scene(
     if (const auto* collision = optional(document, "collision"); collision != nullptr) {
         if (auto rejected = reject_unknown(
                 *collision,
-                {"bounds", "cell_size", "max_colliders", "max_grid_references", "max_candidate_pairs", "max_impacts"},
+                version_0_5
+                    ? std::initializer_list<std::string_view>{
+                          "bounds", "cell_size", "max_colliders", "max_grid_references", "max_candidate_pairs",
+                          "max_contact_pairs", "max_impacts"}
+                    : std::initializer_list<std::string_view>{
+                          "bounds", "cell_size", "max_colliders", "max_grid_references", "max_candidate_pairs",
+                          "max_impacts"},
                 source,
                 "/collision",
                 DiagnosticCode::game_scene_invalid);
@@ -2153,6 +2462,19 @@ Result<GameScenePlan> parse_scene(
         plan.max_colliders = *max_colliders;
         plan.max_grid_references = *max_references;
         plan.max_candidate_pairs = *max_candidates;
+        if (version_0_5 && optional(*collision, "max_contact_pairs") != nullptr) {
+            auto max_contacts = u32_value(
+                *collision, "max_contact_pairs", 1U, 100'000U, source, "/collision",
+                DiagnosticCode::game_collision_interaction_invalid);
+            if (!max_contacts) return std::unexpected(std::move(max_contacts.error()));
+            if (*max_contacts > *max_candidates) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_collision_interaction_invalid,
+                    "max_contact_pairs must not exceed max_candidate_pairs", source,
+                    "/collision/max_contact_pairs"));
+            }
+            plan.max_contact_pairs = *max_contacts;
+        }
         plan.max_impacts = *max_impacts;
     }
     if (plan.collision_bounds.max.x <= plan.collision_bounds.min.x ||
@@ -2195,7 +2517,7 @@ Result<GameScenePlan> parse_scene(
     plan.spawn_groups.reserve((*spawns)->size());
     for (std::size_t index = 0U; index < (*spawns)->size(); ++index) {
         auto spawn = parse_spawn_group(
-            (**spawns)[index], index, version_0_3, assets, asset_plans, symbols, source);
+            (**spawns)[index], index, version_0_3, version_0_5, assets, asset_plans, symbols, source);
         if (!spawn) return std::unexpected(std::move(spawn.error()));
         if (!spawn_positions_representable(*spawn)) {
             return std::unexpected(game_error(
@@ -2218,6 +2540,34 @@ Result<GameScenePlan> parse_scene(
         plan.spawn_groups.push_back(*spawn);
     }
 
+    std::unordered_map<std::string, std::uint32_t> pool_indices{};
+    if (version_0_4) {
+        auto pools = required(document, "pools", source, "/", DiagnosticCode::game_pool_invalid);
+        if (!pools) return std::unexpected(std::move(pools.error()));
+        if (!(*pools)->is_array() || (*pools)->size() > GameScenePlan::max_pools) {
+            return std::unexpected(game_error(
+                DiagnosticCode::game_pool_invalid, "pools must contain at most 1024 items", source, "/pools"));
+        }
+        std::unordered_set<std::uint32_t> owned_groups{};
+        plan.pools.reserve((*pools)->size());
+        for (std::size_t index = 0U; index < (*pools)->size(); ++index) {
+            auto pool = parse_pool((**pools)[index], index, spawn_group_indices, symbols, source);
+            if (!pool) return std::unexpected(std::move(pool.error()));
+            const auto name = std::string{symbols.view(pool->symbol)};
+            if (!pool_indices.emplace(name, static_cast<std::uint32_t>(plan.pools.size())).second) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_pool_invalid, "Scene contains duplicate pool ids", source,
+                    "/pools/" + std::to_string(index) + "/id"));
+            }
+            if (!owned_groups.insert(pool->spawn_group_index).second) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_pool_invalid, "A spawn group may belong to only one pool", source,
+                    "/pools/" + std::to_string(index) + "/group"));
+            }
+            plan.pools.push_back(*pool);
+        }
+    }
+
     auto systems = required(document, "systems", source, "/", DiagnosticCode::game_scene_invalid);
     if (!systems) return std::unexpected(std::move(systems.error()));
     if (!(*systems)->is_array() || (*systems)->size() > GameScenePlan::max_systems) {
@@ -2229,7 +2579,7 @@ Result<GameScenePlan> parse_scene(
     plan.systems.reserve((*systems)->size());
     for (std::size_t index = 0U; index < (*systems)->size(); ++index) {
         auto system = parse_system(
-            (**systems)[index], index, version_0_3, actions, spawn_group_indices, grid_indices, system_indices,
+            (**systems)[index], index, version_0_3, version_0_5, actions, spawn_group_indices, grid_indices, system_indices,
             plan.systems, symbols, source);
         if (!system) return std::unexpected(std::move(system.error()));
         if (!system_ids.insert(system->symbol).second) {
@@ -2252,7 +2602,7 @@ Result<GameScenePlan> parse_scene(
         plan.collision_rules.reserve(collision_rules->size());
         for (std::size_t index = 0U; index < collision_rules->size(); ++index) {
             auto rule = parse_collision_rule(
-                (*collision_rules)[index], index, version_0_3, states, assets, asset_plans, symbols, source);
+                (*collision_rules)[index], index, version_0_3, version_0_5, states, assets, asset_plans, symbols, source);
             if (!rule) return std::unexpected(std::move(rule.error()));
             if (version_0_3) {
                 const auto name = std::string{symbols.view(rule->symbol)};
@@ -2277,7 +2627,9 @@ Result<GameScenePlan> parse_scene(
             for (std::size_t index = 0U; index < rules->size(); ++index) {
                 auto rule = parse_game_rule(
                     (*rules)[index], index, actions, states, state_plans, spawn_group_indices, plan.spawn_groups,
-                    grid_indices, system_indices, plan.systems, collision_rule_indices, plan.collision_rules,
+                    pool_indices, plan.pools, grid_indices, system_indices, plan.systems,
+                    collision_rule_indices, plan.collision_rules,
+                    version_0_5,
                     assets, asset_plans,
                     symbols, source);
                 if (!rule) return std::unexpected(std::move(rule.error()));
@@ -2312,6 +2664,20 @@ Result<GameScenePlan> parse_scene(
     std::unordered_set<SymbolId> collider_groups{};
     std::unordered_map<SymbolId, GameBodyMotion> group_motions{};
     std::unordered_map<SymbolId, bool> groups_all_have_velocity{};
+    std::vector<std::int32_t> pool_for_spawn_group(plan.spawn_groups.size(), -1);
+    for (std::size_t pool_index = 0U; pool_index < plan.pools.size(); ++pool_index) {
+        pool_for_spawn_group[plan.pools[pool_index].spawn_group_index] = static_cast<std::int32_t>(pool_index);
+    }
+    const auto collider_group_contains_pool = [&](const SymbolId collider_group) {
+        for (std::size_t group_index = 0U; group_index < plan.spawn_groups.size(); ++group_index) {
+            const auto& spawn = plan.spawn_groups[group_index];
+            if (pool_for_spawn_group[group_index] >= 0 && spawn.has_collider &&
+                spawn.collider.group == collider_group) {
+                return true;
+            }
+        }
+        return false;
+    };
     for (const auto& spawn : plan.spawn_groups) {
         if (!spawn.has_collider) continue;
         collider_groups.insert(spawn.collider.group);
@@ -2355,10 +2721,21 @@ Result<GameScenePlan> parse_scene(
         if (system.operation == GameOperationId::grid_motion) {
             const auto& spawn = plan.spawn_groups[system.spawn_group_index];
             if (!spawn.has_velocity || !spawn.has_collider ||
-                spawn.collider.motion != GameBodyMotion::dynamic_body) {
+                (spawn.collider.motion != GameBodyMotion::dynamic_body &&
+                 (!version_0_5 || spawn.collider.motion != GameBodyMotion::kinematic_body))) {
                 return std::unexpected(game_error(
                     DiagnosticCode::game_scene_invalid,
-                    "grid_motion requires a dynamic collider spawn group with Velocity2D",
+                    "grid_motion requires a dynamic collider, or a v0.5 kinematic collider, with Velocity2D",
+                    source, "/systems"));
+            }
+        }
+        if (system.operation == GameOperationId::linear_motion) {
+            const auto& spawn = plan.spawn_groups[system.spawn_group_index];
+            if (!spawn.has_velocity || (spawn.has_collider &&
+                                         spawn.collider.motion != GameBodyMotion::kinematic_body)) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_scene_invalid,
+                    "linear_motion requires Velocity2D and only permits kinematic colliders",
                     source, "/systems"));
             }
         }
@@ -2369,6 +2746,13 @@ Result<GameScenePlan> parse_scene(
                     DiagnosticCode::game_scene_invalid,
                     "follow_transform_chain requires a one-entity leader and distinct followers",
                     source, "/systems"));
+            }
+            if (version_0_4 &&
+                (pool_for_spawn_group[system.leader_group_index] >= 0 ||
+                 pool_for_spawn_group[system.follower_group_index] >= 0)) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_pool_invalid,
+                    "Pooled groups cannot be owned by follow_transform_chain", source, "/systems"));
             }
         }
     }
@@ -2390,13 +2774,48 @@ Result<GameScenePlan> parse_scene(
     }
     if (version_0_3) {
         std::unordered_set<std::uint32_t> followed_groups{};
+        std::unordered_set<std::uint32_t> linear_groups{};
+        std::unordered_set<std::uint32_t> axis_groups{};
+        std::vector<std::size_t> linear_index_by_group(plan.spawn_groups.size(), plan.systems.size());
         for (std::size_t index = 0U; index < plan.systems.size(); ++index) {
             const auto& system = plan.systems[index];
-            if (system.operation == GameOperationId::grid_motion &&
+            if (system.operation == GameOperationId::linear_motion) {
+                if (!linear_groups.insert(system.spawn_group_index).second) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_scene_invalid,
+                        "A spawn group may have only one linear_motion system", source,
+                        "/systems/" + std::to_string(index)));
+                }
+                linear_index_by_group[system.spawn_group_index] = index;
+            }
+            if (system.operation == GameOperationId::axis_control) {
+                for (std::size_t group_index = 0U; group_index < plan.spawn_groups.size(); ++group_index) {
+                    const auto& spawn = plan.spawn_groups[group_index];
+                    if (spawn.has_collider && spawn.collider.group == system.group) {
+                        axis_groups.insert(static_cast<std::uint32_t>(group_index));
+                    }
+                }
+            }
+        }
+        for (std::size_t index = 0U; index < plan.systems.size(); ++index) {
+            const auto& system = plan.systems[index];
+            const bool kinematic_grid = system.operation == GameOperationId::grid_motion &&
+                                        plan.spawn_groups[system.spawn_group_index].collider.motion ==
+                                            GameBodyMotion::kinematic_body;
+            if (system.operation == GameOperationId::grid_motion && !kinematic_grid &&
                 (collision_system_count != 1U || index >= collision_system_index)) {
                 return std::unexpected(game_error(
                     DiagnosticCode::game_scene_invalid,
                     "grid_motion requires exactly one later simulate_collisions system",
+                    source, "/systems/" + std::to_string(index)));
+            }
+            if (kinematic_grid &&
+                (collision_system_count != 1U || linear_index_by_group[system.spawn_group_index] >= plan.systems.size() ||
+                 index >= linear_index_by_group[system.spawn_group_index] ||
+                 linear_index_by_group[system.spawn_group_index] >= collision_system_index)) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_scene_invalid,
+                    "Kinematic grid_motion must precede linear_motion, which must precede simulate_collisions",
                     source, "/systems/" + std::to_string(index)));
             }
             if (system.operation == GameOperationId::follow_transform_chain &&
@@ -2414,21 +2833,64 @@ Result<GameScenePlan> parse_scene(
                     "A follower spawn group may be owned by only one follow_transform_chain system",
                     source, "/systems/" + std::to_string(index) + "/followers"));
             }
+            if (system.operation == GameOperationId::linear_motion && axis_groups.contains(system.spawn_group_index)) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_scene_invalid,
+                    "linear_motion cannot share a spawn group with axis_control", source,
+                    "/systems/" + std::to_string(index)));
+            }
+            if (system.operation == GameOperationId::follow_transform_chain &&
+                linear_groups.contains(system.follower_group_index)) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_scene_invalid,
+                    "linear_motion cannot own a follower spawn group", source,
+                    "/systems/" + std::to_string(index)));
+            }
         }
     }
+    bool has_trigger_rule = false;
     for (const auto& rule : plan.collision_rules) {
         if (!collider_groups.contains(rule.group_a) || !collider_groups.contains(rule.group_b)) {
             return std::unexpected(game_error(
                 DiagnosticCode::game_scene_invalid, "Collision rule references an unknown collider group", source,
                 "/collision_rules"));
         }
-        if (group_motions[rule.group_a] == GameBodyMotion::dynamic_body &&
-            group_motions[rule.group_b] == GameBodyMotion::dynamic_body) {
+        const auto motion_a = group_motions[rule.group_a];
+        const auto motion_b = group_motions[rule.group_b];
+        if (!version_0_5 && motion_a == GameBodyMotion::dynamic_body &&
+            motion_b == GameBodyMotion::dynamic_body) {
             return std::unexpected(game_error(
                 DiagnosticCode::game_scene_invalid,
                 "SceneSpec does not support dynamic-versus-dynamic collision rules",
                 source,
                 "/collision_rules"));
+        }
+        if (version_0_5) {
+            if (rule.interaction == GameCollisionInteraction::trigger) {
+                has_trigger_rule = true;
+                if (!rule.reactions.empty()) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_collision_interaction_invalid,
+                        "Trigger collision rules cannot contain physical reactions", source, "/collision_rules"));
+                }
+            } else if (rule.interaction == GameCollisionInteraction::solid) {
+                const bool exactly_one_dynamic =
+                    (motion_a == GameBodyMotion::dynamic_body) != (motion_b == GameBodyMotion::dynamic_body);
+                const bool has_reflect = std::any_of(
+                    rule.reactions.begin(), rule.reactions.end(), [](const GameReactionPlan& reaction) {
+                        return reaction.kind == GameReactionKind::reflect;
+                    });
+                if (!exactly_one_dynamic || !has_reflect) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_collision_interaction_invalid,
+                        "Solid interaction requires exactly one dynamic endpoint and a reflect reaction",
+                        source, "/collision_rules"));
+                }
+            } else {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_collision_interaction_invalid,
+                    "SceneSpec 0.5 collision rules require an interaction", source, "/collision_rules"));
+            }
         }
         for (const auto& reaction : rule.reactions) {
             if (reaction.kind == GameReactionKind::reset_group && !collider_groups.contains(reaction.group)) {
@@ -2444,6 +2906,121 @@ Result<GameScenePlan> parse_scene(
                         DiagnosticCode::game_scene_invalid,
                         "reflect target requires dynamic motion and Velocity2D on every collider group member",
                         source, "/collision_rules"));
+                }
+            }
+            if (version_0_4 && reaction.kind == GameReactionKind::deactivate) {
+                const auto target_group = reaction.target == GameReactionTarget::a ? rule.group_a : rule.group_b;
+                if (collider_group_contains_pool(target_group)) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_pool_invalid,
+                        "Legacy deactivate reactions cannot target pooled groups", source, "/collision_rules"));
+                }
+            }
+            if (version_0_4 && reaction.kind == GameReactionKind::reset_group &&
+                collider_group_contains_pool(reaction.group)) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_pool_invalid,
+                    "Legacy reset_group reactions cannot target pooled groups", source, "/collision_rules"));
+            }
+        }
+    }
+    if (has_trigger_rule && plan.max_contact_pairs == 0U) {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_collision_interaction_invalid,
+            "Trigger collision rules require collision.max_contact_pairs", source,
+            "/collision/max_contact_pairs"));
+    }
+    if (version_0_4) {
+        const auto target_collider_group = [&](const GameRulePlan& rule, const GameRuleTargetPlan& target) {
+            const auto& collision_rule = plan.collision_rules[rule.event.collision_rule_index];
+            return target.kind == GameRuleTargetKind::collision_a ? collision_rule.group_a : collision_rule.group_b;
+        };
+        const auto target_may_be_pooled = [&](const GameRulePlan& rule, const GameRuleTargetPlan& target) {
+            if (target.kind == GameRuleTargetKind::spawn_group || target.kind == GameRuleTargetKind::spawn_index) {
+                return pool_for_spawn_group[target.spawn_group_index] >= 0;
+            }
+            return collider_group_contains_pool(target_collider_group(rule, target));
+        };
+        const auto collision_target_is_owned_by_pool = [&](const GameRulePlan& rule,
+                                                            const GameRuleTargetPlan& target,
+                                                            const std::uint32_t pool_index) {
+            const auto collider_group = target_collider_group(rule, target);
+            const auto owned_group = plan.pools[pool_index].spawn_group_index;
+            bool found = false;
+            for (std::size_t group_index = 0U; group_index < plan.spawn_groups.size(); ++group_index) {
+                const auto& spawn = plan.spawn_groups[group_index];
+                if (!spawn.has_collider || spawn.collider.group != collider_group) continue;
+                found = true;
+                if (group_index != owned_group) return false;
+            }
+            return found;
+        };
+        for (const auto& rule : plan.rules) {
+            for (const auto& action : rule.actions) {
+                if ((action.kind == GameRuleActionKind::activate ||
+                     action.kind == GameRuleActionKind::deactivate) &&
+                    target_may_be_pooled(rule, action.target)) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_pool_invalid,
+                        "Pool is the exclusive owner of its group active state", source, "/rules"));
+                }
+                if ((action.kind == GameRuleActionKind::set_group_active_count ||
+                     action.kind == GameRuleActionKind::reset_group) &&
+                    pool_for_spawn_group[action.spawn_group_index] >= 0) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_pool_invalid,
+                        "Pool groups cannot use direct active-count or group reset actions", source, "/rules"));
+                }
+                if (action.kind == GameRuleActionKind::release_to_pool &&
+                    (action.target.kind == GameRuleTargetKind::collision_a ||
+                     action.target.kind == GameRuleTargetKind::collision_b) &&
+                    !collision_target_is_owned_by_pool(rule, action.target, action.pool_index)) {
+                    return std::unexpected(game_error(
+                        DiagnosticCode::game_pool_invalid,
+                        "release_to_pool collision target is not exclusively owned by the pool", source,
+                        "/rules"));
+                }
+                if (action.kind == GameRuleActionKind::spawn_from_pool &&
+                    action.pool_position_kind == GamePoolSpawnPositionKind::constant) {
+                    const double x = static_cast<double>(action.pool_position.x) + action.pool_position_offset.x;
+                    const double y = static_cast<double>(action.pool_position.y) + action.pool_position_offset.y;
+                    if (!representable_float(x) || !representable_float(y)) {
+                        return std::unexpected(game_error(
+                            DiagnosticCode::game_pool_invalid,
+                            "Pool spawn constant position plus offset exceeds the finite float range", source,
+                        "/rules"));
+                    }
+                }
+                if (action.kind == GameRuleActionKind::spawn_from_pool &&
+                    (action.pool_position_kind == GamePoolSpawnPositionKind::initial ||
+                     (action.pool_position_kind == GamePoolSpawnPositionKind::target &&
+                      action.pool_position_target.kind == GameRuleTargetKind::spawn_index))) {
+                    const auto group_index = action.pool_position_kind == GamePoolSpawnPositionKind::initial
+                                                 ? plan.pools[action.pool_index].spawn_group_index
+                                                 : action.pool_position_target.spawn_group_index;
+                    const auto& group = plan.spawn_groups[group_index];
+                    const auto first_item = action.pool_position_kind == GamePoolSpawnPositionKind::initial
+                                                ? 0U
+                                                : action.pool_position_target.item_index;
+                    const auto item_count = action.pool_position_kind == GamePoolSpawnPositionKind::initial
+                                                ? group.count
+                                                : first_item + 1U;
+                    for (std::uint32_t item = first_item; item < item_count; ++item) {
+                        const auto column = item % group.placement.columns;
+                        const auto row = item / group.placement.columns;
+                        const double x = static_cast<double>(group.placement.origin.x) +
+                                         static_cast<double>(column) * group.placement.spacing.x +
+                                         group.transform.position_offset.x + action.pool_position_offset.x;
+                        const double y = static_cast<double>(group.placement.origin.y) +
+                                         static_cast<double>(row) * group.placement.spacing.y +
+                                         group.transform.position_offset.y + action.pool_position_offset.y;
+                        if (!representable_float(x) || !representable_float(y)) {
+                            return std::unexpected(game_error(
+                                DiagnosticCode::game_pool_invalid,
+                                "Pool authored position plus offset exceeds the finite float range", source,
+                                "/rules"));
+                        }
+                    }
                 }
             }
         }
@@ -2728,7 +3305,13 @@ std::string_view GamePlan::symbol(const SymbolId id) const noexcept {
 }
 
 std::string_view GamePlan::schema_version_text() const noexcept {
-    return schema_version == GameSchemaVersion::v0_3 ? supported_schema_version : legacy_schema_version;
+    switch (schema_version) {
+    case GameSchemaVersion::v0_2: return legacy_schema_version;
+    case GameSchemaVersion::v0_3: return event_action_schema_version;
+    case GameSchemaVersion::v0_4: return object_pool_schema_version;
+    case GameSchemaVersion::v0_5: return supported_schema_version;
+    }
+    return {};
 }
 
 std::string_view to_string(const GameAssetKind value) noexcept {
@@ -2747,6 +3330,7 @@ std::string_view to_string(const GameOperationId value) noexcept {
     case GameOperationId::simulate_collisions: return "simulate_collisions";
     case GameOperationId::grid_motion: return "grid_motion";
     case GameOperationId::follow_transform_chain: return "follow_transform_chain";
+    case GameOperationId::linear_motion: return "linear_motion";
     }
     return "simulate_collisions";
 }
@@ -2769,6 +3353,8 @@ std::string_view to_string(const GameRuleEventKind value) noexcept {
     case GameRuleEventKind::action_released: return "action_released";
     case GameRuleEventKind::fixed_interval: return "fixed_interval";
     case GameRuleEventKind::collision: return "collision";
+    case GameRuleEventKind::contact_begin: return "contact_begin";
+    case GameRuleEventKind::contact_end: return "contact_end";
     }
     return "scene_enter";
 }
@@ -2785,8 +3371,85 @@ std::string_view to_string(const GameRuleActionKind value) noexcept {
     case GameRuleActionKind::reset_group: return "reset_group";
     case GameRuleActionKind::play_sound: return "play_sound";
     case GameRuleActionKind::relocate_to_free_cell: return "relocate_to_free_cell";
+    case GameRuleActionKind::spawn_from_pool: return "spawn_from_pool";
+    case GameRuleActionKind::release_to_pool: return "release_to_pool";
+    case GameRuleActionKind::reset_pool: return "reset_pool";
     }
     return "set_int_state";
+}
+
+std::string_view to_string(const GamePoolExhaustionPolicy value) noexcept {
+    switch (value) {
+    case GamePoolExhaustionPolicy::skip: return "skip";
+    case GamePoolExhaustionPolicy::recycle_oldest: return "recycle_oldest";
+    }
+    return "skip";
+}
+
+std::string_view to_string(const GamePoolSpawnPositionKind value) noexcept {
+    switch (value) {
+    case GamePoolSpawnPositionKind::initial: return "initial";
+    case GamePoolSpawnPositionKind::constant: return "constant";
+    case GamePoolSpawnPositionKind::target: return "target";
+    }
+    return "initial";
+}
+
+std::string_view to_string(const GameCollisionInteraction value) noexcept {
+    switch (value) {
+    case GameCollisionInteraction::legacy: return "legacy";
+    case GameCollisionInteraction::solid: return "solid";
+    case GameCollisionInteraction::trigger: return "trigger";
+    }
+    return "legacy";
+}
+
+std::string_view to_string(const GameTestAssertionKind value) noexcept {
+    switch (value) {
+    case GameTestAssertionKind::current_scene: return "current_scene";
+    case GameTestAssertionKind::int_state: return "int_state";
+    case GameTestAssertionKind::group_active_count: return "group_active_count";
+    case GameTestAssertionKind::entity_active: return "entity_active";
+    case GameTestAssertionKind::position: return "position";
+    case GameTestAssertionKind::velocity: return "velocity";
+    case GameTestAssertionKind::runtime_metric: return "runtime_metric";
+    }
+    return "current_scene";
+}
+
+std::string_view to_string(const GameTestMetric value) noexcept {
+    switch (value) {
+    case GameTestMetric::rule_executions: return "rule_executions";
+    case GameTestMetric::condition_evaluations: return "condition_evaluations";
+    case GameTestMetric::action_executions: return "action_executions";
+    case GameTestMetric::grid_steps: return "grid_steps";
+    case GameTestMetric::rejected_direction_changes: return "rejected_direction_changes";
+    case GameTestMetric::follower_updates: return "follower_updates";
+    case GameTestMetric::active_state_changes: return "active_state_changes";
+    case GameTestMetric::relocations: return "relocations";
+    case GameTestMetric::relocation_cells_scanned: return "relocation_cells_scanned";
+    case GameTestMetric::collision_contacts: return "collision_contacts";
+    case GameTestMetric::trigger_narrowphase_tests: return "trigger_narrowphase_tests";
+    case GameTestMetric::contact_begins: return "contact_begins";
+    case GameTestMetric::contact_ends: return "contact_ends";
+    case GameTestMetric::stale_contact_events: return "stale_contact_events";
+    case GameTestMetric::active_contact_pairs: return "active_contact_pairs";
+    case GameTestMetric::peak_contact_pairs: return "peak_contact_pairs";
+    case GameTestMetric::motion_segments: return "motion_segments";
+    case GameTestMetric::linear_motion_updates: return "linear_motion_updates";
+    case GameTestMetric::pool_acquire_attempts: return "pool_acquire_attempts";
+    case GameTestMetric::pool_acquire_successes: return "pool_acquire_successes";
+    case GameTestMetric::pool_releases: return "pool_releases";
+    case GameTestMetric::pool_release_misses: return "pool_release_misses";
+    case GameTestMetric::pool_exhaustions: return "pool_exhaustions";
+    case GameTestMetric::pool_recycled_slots: return "pool_recycled_slots";
+    case GameTestMetric::pool_expirations: return "pool_expirations";
+    case GameTestMetric::pool_resets: return "pool_resets";
+    case GameTestMetric::pool_lifetime_checks: return "pool_lifetime_checks";
+    case GameTestMetric::active_pooled_entities: return "active_pooled_entities";
+    case GameTestMetric::peak_active_pooled_entities: return "peak_active_pooled_entities";
+    }
+    return "rule_executions";
 }
 
 std::string_view to_string(const GameReactionKind value) noexcept {
@@ -2832,8 +3495,11 @@ std::string_view to_string(const RenderFpsCap value) noexcept {
 
 std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
     StableHash hash{};
-    const bool version_0_3 = plan.schema_version == GameSchemaVersion::v0_3;
-    hash.text(version_0_3 ? GamePlan::supported_schema_version : GamePlan::legacy_schema_version);
+    const bool version_0_3 = plan.schema_version != GameSchemaVersion::v0_2;
+    const bool version_0_4 = plan.schema_version == GameSchemaVersion::v0_4 ||
+                             plan.schema_version == GameSchemaVersion::v0_5;
+    const bool version_0_5 = plan.schema_version == GameSchemaVersion::v0_5;
+    hash.text(plan.schema_version_text());
     hash.scalar(plan.source_hash);
     if (version_0_3) hash.scalar(plan.seed);
     for (const auto& symbol : plan.symbols) hash.text(symbol);
@@ -2885,6 +3551,7 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
         hash.scalar(scene.max_colliders);
         hash.scalar(scene.max_grid_references);
         hash.scalar(scene.max_candidate_pairs);
+        if (version_0_5) hash.scalar(scene.max_contact_pairs);
         hash.scalar(scene.max_impacts);
         if (version_0_3) {
             for (const auto& grid : scene.grids) {
@@ -2925,6 +3592,13 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
             hash.scalar(spawn.collider.trigger);
             hash.scalar(spawn.collider.enabled);
         }
+        if (version_0_4) {
+            for (const auto& pool : scene.pools) {
+                hash.scalar(pool.symbol);
+                hash.scalar(pool.spawn_group_index);
+                hash.scalar(pool.on_exhausted);
+            }
+        }
         for (const auto& system : scene.systems) {
             hash.scalar(system.symbol);
             hash.scalar(system.operation);
@@ -2951,6 +3625,7 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
             if (version_0_3) hash.scalar(rule.symbol);
             hash.scalar(rule.group_a);
             hash.scalar(rule.group_b);
+            if (version_0_5) hash.scalar(rule.interaction);
             for (const auto& reaction : rule.reactions) {
                 hash.scalar(reaction.kind);
                 hash.scalar(reaction.target);
@@ -2993,6 +3668,20 @@ std::uint64_t compute_game_plan_hash(const GamePlan& plan) {
                     for (const auto group : action.occupancy_group_indices) hash.scalar(group);
                     hash.scalar(action.has_result_state);
                     hash.scalar(action.result_state_index);
+                    if (version_0_4) {
+                        hash.scalar(action.pool_index);
+                        hash.scalar(action.pool_position_kind);
+                        hash_vec2(hash, action.pool_position);
+                        hash.scalar(action.pool_position_target.kind);
+                        hash.scalar(action.pool_position_target.spawn_group_index);
+                        hash.scalar(action.pool_position_target.item_index);
+                        hash_vec2(hash, action.pool_position_offset);
+                        hash.scalar(action.has_velocity_override);
+                        hash.scalar(action.has_rotation_override);
+                        hash.scalar(action.rotation);
+                        hash.scalar(action.has_lifetime);
+                        hash.scalar(action.lifetime_ticks);
+                    }
                 }
             }
         }
@@ -3036,6 +3725,15 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         return std::unexpected(game_error(
             DiagnosticCode::game_manifest_invalid, std::string{message}, plan.manifest_path.string()));
     };
+    const auto pool_invalid = [&](const std::string_view message) -> Result<void> {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_pool_invalid, std::string{message}, plan.manifest_path.string()));
+    };
+    const auto interaction_invalid = [&](const std::string_view message) -> Result<void> {
+        return std::unexpected(game_error(
+            DiagnosticCode::game_collision_interaction_invalid, std::string{message},
+            plan.manifest_path.string()));
+    };
     const auto valid_symbol = [&](const SymbolId id) noexcept {
         return id < plan.symbols.size() && !plan.symbols[id].empty();
     };
@@ -3069,8 +3767,11 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         } while (magnitude != 0U);
         return width;
     };
-    const bool version_0_3 = plan.schema_version == GameSchemaVersion::v0_3;
-    if (static_cast<std::uint32_t>(plan.schema_version) > static_cast<std::uint32_t>(GameSchemaVersion::v0_3) ||
+    const bool version_0_3 = plan.schema_version != GameSchemaVersion::v0_2;
+    const bool version_0_4 = plan.schema_version == GameSchemaVersion::v0_4 ||
+                             plan.schema_version == GameSchemaVersion::v0_5;
+    const bool version_0_5 = plan.schema_version == GameSchemaVersion::v0_5;
+    if (static_cast<std::uint32_t>(plan.schema_version) > static_cast<std::uint32_t>(GameSchemaVersion::v0_5) ||
         (!version_0_3 && plan.seed != 0U)) {
         return invalid("GamePlan schema version or seed is invalid");
     }
@@ -3165,6 +3866,7 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         state_names.emplace(std::string{plan.symbol(state.symbol)}, static_cast<std::uint32_t>(state_index));
     }
     std::unordered_set<SymbolId> scene_ids{};
+    std::uint64_t aggregate_contact_pairs = 0U;
     for (const auto& scene : plan.scenes) {
         if (!valid_symbol(scene.symbol) || scene.world_capacity == 0U ||
             scene.world_capacity > GameScenePlan::max_world_capacity ||
@@ -3180,14 +3882,25 @@ Result<void> validate_game_plan(const GamePlan& plan) {
             scene.max_candidate_pairs == 0U ||
             scene.max_candidate_pairs > GameScenePlan::max_collision_capacity || scene.max_impacts == 0U ||
             scene.max_impacts > GameScenePlan::max_impacts_per_dynamic ||
+            (!version_0_5 && scene.max_contact_pairs != 0U) ||
             scene.grids.size() > GameScenePlan::max_grids ||
+            scene.pools.size() > GameScenePlan::max_pools ||
             scene.spawn_groups.size() > GameScenePlan::max_spawn_groups ||
             scene.systems.size() > GameScenePlan::max_systems ||
             scene.collision_rules.size() > GameScenePlan::max_collision_rules ||
             scene.ui.size() > GameScenePlan::max_ui_elements ||
             scene.rules.size() > GameScenePlan::max_rules ||
-            (!version_0_3 && (!scene.grids.empty() || !scene.rules.empty()))) {
+            (!version_0_3 && (!scene.grids.empty() || !scene.rules.empty())) ||
+            (!version_0_4 && !scene.pools.empty())) {
             return invalid("GamePlan contains an invalid scene configuration");
+        }
+        if (version_0_5 &&
+            (scene.max_contact_pairs > 100'000U || scene.max_contact_pairs > scene.max_candidate_pairs)) {
+            return interaction_invalid("GamePlan contains an invalid contact capacity");
+        }
+        aggregate_contact_pairs += scene.max_contact_pairs;
+        if (aggregate_contact_pairs > 1'000'000U) {
+            return interaction_invalid("GamePlan aggregate contact capacity exceeds one million pairs");
         }
         const double collision_width =
             static_cast<double>(scene.collision_bounds.max.x) - scene.collision_bounds.min.x;
@@ -3222,6 +3935,9 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         std::unordered_map<SymbolId, bool> groups_all_have_velocity{};
         std::uint64_t render_submission_count = 0U;
         for (const auto& spawn : scene.spawn_groups) {
+            if (version_0_5 && spawn.has_collider && spawn.collider.trigger) {
+                return interaction_invalid("GamePlan 0.5 collider contains the removed trigger field");
+            }
             if (!valid_symbol(spawn.symbol) || spawn.count == 0U || spawn.count > GameSpawnGroupPlan::max_count ||
                 spawn.active_count > spawn.count || (!version_0_3 && spawn.active_count != spawn.count) ||
                 spawn.placement.columns == 0U || spawn.placement.columns > GamePlacementPlan::max_columns ||
@@ -3243,7 +3959,8 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                   static_cast<std::uint32_t>(spawn.collider.motion) >
                       static_cast<std::uint32_t>(GameBodyMotion::dynamic_body) ||
                   !finite_vec2(spawn.collider.offset) || !finite_vec2(spawn.collider.half_extent) ||
-                  spawn.collider.half_extent.x <= 0.0F || spawn.collider.half_extent.y <= 0.0F))) {
+                  spawn.collider.half_extent.x <= 0.0F || spawn.collider.half_extent.y <= 0.0F ||
+                  (version_0_5 && spawn.collider.trigger)))) {
                 return invalid("GamePlan contains an invalid spawn group");
             }
             if (!spawn_ids.insert(spawn.symbol).second || spawn_total > scene.world_capacity - spawn.count) {
@@ -3267,6 +3984,29 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         if (spawn_total != scene.total_spawn_count || collider_total > scene.max_colliders) {
             return invalid("GamePlan scene count metadata is inconsistent");
         }
+        std::vector<std::int32_t> pool_for_spawn_group(scene.spawn_groups.size(), -1);
+        std::unordered_set<SymbolId> pool_ids{};
+        for (std::size_t pool_index = 0U; pool_index < scene.pools.size(); ++pool_index) {
+            const auto& pool = scene.pools[pool_index];
+            if (!version_0_4 || !valid_symbol(pool.symbol) || !pool_ids.insert(pool.symbol).second ||
+                pool.spawn_group_index >= scene.spawn_groups.size() ||
+                static_cast<std::uint32_t>(pool.on_exhausted) >
+                    static_cast<std::uint32_t>(GamePoolExhaustionPolicy::recycle_oldest) ||
+                pool_for_spawn_group[pool.spawn_group_index] >= 0) {
+                return pool_invalid("GamePlan contains an invalid or multiply-owned pool");
+            }
+            pool_for_spawn_group[pool.spawn_group_index] = static_cast<std::int32_t>(pool_index);
+        }
+        const auto collider_group_contains_pool = [&](const SymbolId collider_group) {
+            for (std::size_t group_index = 0U; group_index < scene.spawn_groups.size(); ++group_index) {
+                const auto& spawn = scene.spawn_groups[group_index];
+                if (pool_for_spawn_group[group_index] >= 0 && spawn.has_collider &&
+                    spawn.collider.group == collider_group) {
+                    return true;
+                }
+            }
+            return false;
+        };
         const auto group_aligned_to_grid = [&](const std::uint32_t group_index,
                                                const std::uint32_t grid_index) noexcept {
             if (group_index >= scene.spawn_groups.size() || grid_index >= scene.grids.size()) return false;
@@ -3299,11 +4039,14 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         std::size_t collision_system_index = scene.systems.size();
         std::uint32_t collision_system_count = 0U;
         std::unordered_set<std::uint32_t> followed_groups{};
+        std::unordered_set<std::uint32_t> linear_groups{};
+        std::vector<std::size_t> linear_index_by_group(scene.spawn_groups.size(), scene.systems.size());
         for (std::size_t system_index = 0U; system_index < scene.systems.size(); ++system_index) {
             const auto& system = scene.systems[system_index];
             if (!valid_symbol(system.symbol) ||
                 static_cast<std::uint32_t>(system.operation) >
-                    static_cast<std::uint32_t>(version_0_3 ? GameOperationId::follow_transform_chain
+                    static_cast<std::uint32_t>(version_0_5 ? GameOperationId::linear_motion
+                                                          : version_0_3 ? GameOperationId::follow_transform_chain
                                                           : GameOperationId::simulate_collisions) ||
                 (system.operation == GameOperationId::axis_control &&
                  (system.negative_action >= plan.actions.size() || system.positive_action >= plan.actions.size())) ||
@@ -3335,7 +4078,9 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                      static_cast<std::uint32_t>(GameDirection::right) ||
                  !scene.spawn_groups[system.spawn_group_index].has_velocity ||
                  !scene.spawn_groups[system.spawn_group_index].has_collider ||
-                 scene.spawn_groups[system.spawn_group_index].collider.motion != GameBodyMotion::dynamic_body)) {
+                 (scene.spawn_groups[system.spawn_group_index].collider.motion != GameBodyMotion::dynamic_body &&
+                  (!version_0_5 || scene.spawn_groups[system.spawn_group_index].collider.motion !=
+                                        GameBodyMotion::kinematic_body)))) {
                 return invalid("GamePlan grid_motion system is inconsistent");
             }
             if (system.operation == GameOperationId::grid_motion &&
@@ -3356,19 +4101,58 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                 if (!followed_groups.insert(system.follower_group_index).second) {
                     return invalid("GamePlan follower group has multiple follow_transform_chain owners");
                 }
+                if (linear_groups.contains(system.follower_group_index)) {
+                    return invalid("GamePlan linear_motion cannot own a follower group");
+                }
                 const auto grid_index = scene.systems[system.motion_system_index].grid_index;
                 if (!group_aligned_to_grid(system.leader_group_index, grid_index) ||
                     !group_aligned_to_grid(system.follower_group_index, grid_index)) {
                     return invalid("GamePlan follow groups are not aligned to the motion grid");
+                }
+                if (version_0_4 &&
+                    (pool_for_spawn_group[system.leader_group_index] >= 0 ||
+                     pool_for_spawn_group[system.follower_group_index] >= 0)) {
+                    return pool_invalid("GamePlan follow_transform_chain cannot own pooled groups");
+                }
+            }
+            if (system.operation == GameOperationId::linear_motion) {
+                if (system.spawn_group_index >= scene.spawn_groups.size() ||
+                    !linear_groups.insert(system.spawn_group_index).second) {
+                    return invalid("GamePlan linear_motion has an invalid or duplicate group owner");
+                }
+                const auto& spawn = scene.spawn_groups[system.spawn_group_index];
+                if (!spawn.has_velocity ||
+                    (spawn.has_collider && spawn.collider.motion != GameBodyMotion::kinematic_body)) {
+                    return invalid("GamePlan linear_motion group is missing Velocity2D or is not kinematic");
+                }
+                linear_index_by_group[system.spawn_group_index] = system_index;
+                if (followed_groups.contains(system.spawn_group_index)) {
+                    return invalid("GamePlan linear_motion cannot own a follower group");
+                }
+                for (const auto& other : scene.systems) {
+                    if (other.operation != GameOperationId::axis_control) continue;
+                    if (spawn.has_collider && spawn.collider.group == other.group) {
+                        return invalid("GamePlan linear_motion cannot overlap axis_control ownership");
+                    }
                 }
             }
         }
         if (version_0_3) {
             for (std::size_t system_index = 0U; system_index < scene.systems.size(); ++system_index) {
                 const auto& system = scene.systems[system_index];
-                if (system.operation == GameOperationId::grid_motion &&
+                const bool kinematic_grid = system.operation == GameOperationId::grid_motion &&
+                                            scene.spawn_groups[system.spawn_group_index].collider.motion ==
+                                                GameBodyMotion::kinematic_body;
+                if (system.operation == GameOperationId::grid_motion && !kinematic_grid &&
                     (collision_system_count != 1U || system_index >= collision_system_index)) {
                     return invalid("GamePlan grid_motion must precede exactly one collision system");
+                }
+                if (kinematic_grid &&
+                    (collision_system_count != 1U ||
+                     linear_index_by_group[system.spawn_group_index] >= scene.systems.size() ||
+                     system_index >= linear_index_by_group[system.spawn_group_index] ||
+                     linear_index_by_group[system.spawn_group_index] >= collision_system_index)) {
+                    return invalid("GamePlan kinematic grid/linear/collision order is invalid");
                 }
                 if (system.operation == GameOperationId::follow_transform_chain &&
                     (collision_system_count != 1U || system.motion_system_index >= collision_system_index ||
@@ -3382,6 +4166,7 @@ Result<void> validate_game_plan(const GamePlan& plan) {
         }
         std::unordered_set<std::uint64_t> collision_pairs{};
         std::unordered_set<SymbolId> collision_rule_ids{};
+        bool has_trigger_rule = false;
         for (const auto& rule : scene.collision_rules) {
             if ((version_0_3 && (!valid_symbol(rule.symbol) || !collision_rule_ids.insert(rule.symbol).second)) ||
                 (!version_0_3 && rule.symbol != 0U) ||
@@ -3391,14 +4176,41 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                 !group_motions.contains(rule.group_a) || !group_motions.contains(rule.group_b)) {
                 return invalid("GamePlan contains an invalid collision rule");
             }
-            if (group_motions[rule.group_a] == GameBodyMotion::dynamic_body &&
+            if (!version_0_5 && group_motions[rule.group_a] == GameBodyMotion::dynamic_body &&
                 group_motions[rule.group_b] == GameBodyMotion::dynamic_body) {
                 return invalid("GamePlan contains an unsupported dynamic-versus-dynamic rule");
             }
             const auto lower = std::min(rule.group_a, rule.group_b);
             const auto upper = std::max(rule.group_a, rule.group_b);
             const auto pair = (static_cast<std::uint64_t>(lower) << 32U) | upper;
-            if (!collision_pairs.insert(pair).second) return invalid("GamePlan contains duplicate collision pairs");
+            if (!collision_pairs.insert(pair).second && !version_0_5) {
+                return invalid("GamePlan contains duplicate collision pairs");
+            }
+            if (version_0_5) {
+                const auto motion_a = group_motions[rule.group_a];
+                const auto motion_b = group_motions[rule.group_b];
+                if (rule.interaction == GameCollisionInteraction::trigger) {
+                    has_trigger_rule = true;
+                    if (!rule.reactions.empty()) {
+                        return interaction_invalid("GamePlan trigger rule contains reactions");
+                    }
+                } else if (rule.interaction == GameCollisionInteraction::solid) {
+                    const bool exactly_one_dynamic =
+                        (motion_a == GameBodyMotion::dynamic_body) != (motion_b == GameBodyMotion::dynamic_body);
+                    const bool has_reflect = std::any_of(
+                        rule.reactions.begin(), rule.reactions.end(), [](const GameReactionPlan& reaction) {
+                            return reaction.kind == GameReactionKind::reflect;
+                        });
+                    if (!exactly_one_dynamic || !has_reflect) {
+                        return interaction_invalid(
+                            "GamePlan solid interaction body combination or reactions are invalid");
+                    }
+                } else {
+                    return interaction_invalid("GamePlan v0.5 collision interaction is missing");
+                }
+            } else if (rule.interaction != GameCollisionInteraction::legacy) {
+                return interaction_invalid("Legacy GamePlan contains a v0.5 collision interaction");
+            }
             for (const auto& reaction : rule.reactions) {
                 if (static_cast<std::uint32_t>(reaction.kind) > static_cast<std::uint32_t>(GameReactionKind::play_sound) ||
                     static_cast<std::uint32_t>(reaction.target) > static_cast<std::uint32_t>(GameReactionTarget::b) ||
@@ -3417,7 +4229,20 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                         return invalid("GamePlan reflect target is not uniformly dynamic with Velocity2D");
                     }
                 }
+                if (version_0_4 && reaction.kind == GameReactionKind::deactivate) {
+                    const auto target_group = reaction.target == GameReactionTarget::a ? rule.group_a : rule.group_b;
+                    if (collider_group_contains_pool(target_group)) {
+                        return pool_invalid("GamePlan legacy deactivate reaction targets a pooled group");
+                    }
+                }
+                if (version_0_4 && reaction.kind == GameReactionKind::reset_group &&
+                    collider_group_contains_pool(reaction.group)) {
+                    return pool_invalid("GamePlan legacy reset_group reaction targets a pooled group");
+                }
             }
+        }
+        if (has_trigger_rule && scene.max_contact_pairs == 0U) {
+            return interaction_invalid("GamePlan trigger rules require max_contact_pairs");
         }
         std::unordered_set<SymbolId> game_rule_ids{};
         for (const auto& rule : scene.rules) {
@@ -3425,15 +4250,32 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                 rule.conditions.size() > GameRulePlan::max_conditions || rule.actions.empty() ||
                 rule.actions.size() > GameRulePlan::max_actions ||
                 static_cast<std::uint32_t>(rule.event.kind) >
-                    static_cast<std::uint32_t>(GameRuleEventKind::collision) ||
+                    static_cast<std::uint32_t>(version_0_5 ? GameRuleEventKind::contact_end
+                                                          : GameRuleEventKind::collision) ||
                 ((rule.event.kind == GameRuleEventKind::action_pressed ||
                   rule.event.kind == GameRuleEventKind::action_released) &&
                  rule.event.action_index >= plan.actions.size()) ||
                 (rule.event.kind == GameRuleEventKind::fixed_interval &&
                  (rule.event.interval_ticks == 0U || rule.event.interval_ticks > 1'000'000U)) ||
-                (rule.event.kind == GameRuleEventKind::collision &&
+                ((rule.event.kind == GameRuleEventKind::collision ||
+                  rule.event.kind == GameRuleEventKind::contact_begin ||
+                  rule.event.kind == GameRuleEventKind::contact_end) &&
                  rule.event.collision_rule_index >= scene.collision_rules.size())) {
                 return invalid("GamePlan contains an invalid event-action rule");
+            }
+            if (rule.event.kind == GameRuleEventKind::collision && version_0_5 &&
+                scene.collision_rules[rule.event.collision_rule_index].interaction !=
+                    GameCollisionInteraction::solid) {
+                return interaction_invalid(
+                    "GamePlan collision event does not reference a solid interaction");
+            }
+            if ((rule.event.kind == GameRuleEventKind::contact_begin ||
+                 rule.event.kind == GameRuleEventKind::contact_end) &&
+                (!version_0_5 ||
+                 scene.collision_rules[rule.event.collision_rule_index].interaction !=
+                     GameCollisionInteraction::trigger)) {
+                return interaction_invalid(
+                    "GamePlan contact event does not reference a trigger interaction");
             }
             for (const auto& condition : rule.conditions) {
                 if (static_cast<std::uint32_t>(condition.kind) >
@@ -3449,16 +4291,47 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                     return invalid("GamePlan contains an invalid rule condition");
                 }
             }
-            const bool collision_context = rule.event.kind == GameRuleEventKind::collision;
+            const bool collision_context = rule.event.kind == GameRuleEventKind::collision ||
+                                           rule.event.kind == GameRuleEventKind::contact_begin ||
+                                           rule.event.kind == GameRuleEventKind::contact_end;
+            const auto target_collider_group = [&](const GameRuleTargetPlan& target) {
+                const auto& collision_rule = scene.collision_rules[rule.event.collision_rule_index];
+                return target.kind == GameRuleTargetKind::collision_a ? collision_rule.group_a
+                                                                      : collision_rule.group_b;
+            };
+            const auto target_may_be_pooled = [&](const GameRuleTargetPlan& target) {
+                if (target.kind == GameRuleTargetKind::spawn_group ||
+                    target.kind == GameRuleTargetKind::spawn_index) {
+                    return target.spawn_group_index < pool_for_spawn_group.size() &&
+                           pool_for_spawn_group[target.spawn_group_index] >= 0;
+                }
+                return collision_context && collider_group_contains_pool(target_collider_group(target));
+            };
+            const auto collision_target_owned_by_pool = [&](const GameRuleTargetPlan& target,
+                                                             const std::uint32_t pool_index) {
+                if (!collision_context || pool_index >= scene.pools.size()) return false;
+                const auto endpoint = target_collider_group(target);
+                const auto owned_group = scene.pools[pool_index].spawn_group_index;
+                bool found = false;
+                for (std::size_t group_index = 0U; group_index < scene.spawn_groups.size(); ++group_index) {
+                    const auto& spawn = scene.spawn_groups[group_index];
+                    if (!spawn.has_collider || spawn.collider.group != endpoint) continue;
+                    found = true;
+                    if (group_index != owned_group) return false;
+                }
+                return found;
+            };
             for (const auto& action : rule.actions) {
                 if (static_cast<std::uint32_t>(action.kind) >
-                    static_cast<std::uint32_t>(GameRuleActionKind::relocate_to_free_cell)) {
+                    static_cast<std::uint32_t>(version_0_4 ? GameRuleActionKind::reset_pool
+                                                          : GameRuleActionKind::relocate_to_free_cell)) {
                     return invalid("GamePlan contains an invalid rule action kind");
                 }
                 const bool target_action = action.kind == GameRuleActionKind::activate ||
                                            action.kind == GameRuleActionKind::deactivate ||
                                            action.kind == GameRuleActionKind::set_velocity ||
-                                           action.kind == GameRuleActionKind::relocate_to_free_cell;
+                                           action.kind == GameRuleActionKind::relocate_to_free_cell ||
+                                           action.kind == GameRuleActionKind::release_to_pool;
                 if (target_action &&
                     (static_cast<std::uint32_t>(action.target.kind) >
                          static_cast<std::uint32_t>(GameRuleTargetKind::collision_b) ||
@@ -3467,10 +4340,12 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                       (action.target.spawn_group_index >= scene.spawn_groups.size() ||
                        (action.target.kind == GameRuleTargetKind::spawn_index &&
                         action.target.item_index >= scene.spawn_groups[action.target.spawn_group_index].count))) ||
-                     ((action.target.kind == GameRuleTargetKind::collision_a ||
-                       action.target.kind == GameRuleTargetKind::collision_b) &&
-                      !collision_context))) {
-                    return invalid("GamePlan contains an invalid rule action target");
+                      ((action.target.kind == GameRuleTargetKind::collision_a ||
+                        action.target.kind == GameRuleTargetKind::collision_b) &&
+                       !collision_context))) {
+                    return action.kind == GameRuleActionKind::release_to_pool
+                               ? pool_invalid("GamePlan release_to_pool action target is invalid")
+                               : invalid("GamePlan contains an invalid rule action target");
                 }
                 switch (action.kind) {
                 case GameRuleActionKind::set_int_state:
@@ -3484,7 +4359,11 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                     if (action.state_index >= plan.states.size()) return invalid("GamePlan add_int_state action is invalid");
                     break;
                 case GameRuleActionKind::activate:
-                case GameRuleActionKind::deactivate: break;
+                case GameRuleActionKind::deactivate:
+                    if (version_0_4 && target_may_be_pooled(action.target)) {
+                        return pool_invalid("GamePlan direct active-state action targets a pooled group");
+                    }
+                    break;
                 case GameRuleActionKind::set_group_active_count:
                     if (action.spawn_group_index >= scene.spawn_groups.size() ||
                         (!action.count_from_state &&
@@ -3495,6 +4374,9 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                           plan.states[action.count_state_index].maximum >
                               static_cast<std::int32_t>(scene.spawn_groups[action.spawn_group_index].count)))) {
                         return invalid("GamePlan set_group_active_count action is invalid");
+                    }
+                    if (version_0_4 && pool_for_spawn_group[action.spawn_group_index] >= 0) {
+                        return pool_invalid("GamePlan active-count action targets a pooled group");
                     }
                     break;
                 case GameRuleActionKind::set_velocity:
@@ -3528,6 +4410,9 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                     break;
                 case GameRuleActionKind::reset_group:
                     if (action.spawn_group_index >= scene.spawn_groups.size()) return invalid("GamePlan reset_group action is invalid");
+                    if (version_0_4 && pool_for_spawn_group[action.spawn_group_index] >= 0) {
+                        return pool_invalid("GamePlan reset_group action targets a pooled group");
+                    }
                     break;
                 case GameRuleActionKind::play_sound:
                     if (action.asset_index >= plan.assets.size() ||
@@ -3559,6 +4444,99 @@ Result<void> validate_game_plan(const GamePlan& plan) {
                         (plan.states[action.result_state_index].minimum > 0 ||
                          plan.states[action.result_state_index].maximum < 1)) {
                         return invalid("GamePlan relocation result state is invalid");
+                    }
+                    break;
+                case GameRuleActionKind::spawn_from_pool:
+                    if (!version_0_4 || action.pool_index >= scene.pools.size() ||
+                        static_cast<std::uint32_t>(action.pool_position_kind) >
+                            static_cast<std::uint32_t>(GamePoolSpawnPositionKind::target) ||
+                        !finite_vec2(action.pool_position) || !finite_vec2(action.pool_position_offset) ||
+                        (action.has_velocity_override && !finite_vec2(action.velocity)) ||
+                        (action.has_rotation_override && !std::isfinite(action.rotation)) ||
+                        (action.has_lifetime &&
+                         (action.lifetime_ticks == 0U || action.lifetime_ticks > 1'000'000U)) ||
+                        (action.has_result_state && action.result_state_index >= plan.states.size())) {
+                        return pool_invalid("GamePlan spawn_from_pool action is invalid");
+                    }
+                    if (action.has_velocity_override &&
+                        !scene.spawn_groups[scene.pools[action.pool_index].spawn_group_index].has_velocity) {
+                        return pool_invalid("GamePlan pool velocity override lacks Velocity2D");
+                    }
+                    if (action.pool_position_kind == GamePoolSpawnPositionKind::constant) {
+                        const double x = static_cast<double>(action.pool_position.x) +
+                                         action.pool_position_offset.x;
+                        const double y = static_cast<double>(action.pool_position.y) +
+                                         action.pool_position_offset.y;
+                        if (!representable_float(x) || !representable_float(y)) {
+                            return pool_invalid("GamePlan pool constant position plus offset is not representable");
+                        }
+                    }
+                    if (action.pool_position_kind == GamePoolSpawnPositionKind::target) {
+                        const auto& target = action.pool_position_target;
+                        if (target.kind == GameRuleTargetKind::spawn_group ||
+                            static_cast<std::uint32_t>(target.kind) >
+                                static_cast<std::uint32_t>(GameRuleTargetKind::collision_b) ||
+                            (target.kind == GameRuleTargetKind::spawn_index &&
+                             (target.spawn_group_index >= scene.spawn_groups.size() ||
+                              target.item_index >= scene.spawn_groups[target.spawn_group_index].count)) ||
+                            ((target.kind == GameRuleTargetKind::collision_a ||
+                              target.kind == GameRuleTargetKind::collision_b) && !collision_context)) {
+                            return pool_invalid("GamePlan pool position target is invalid");
+                        }
+                    }
+                    if (action.pool_position_kind == GamePoolSpawnPositionKind::initial ||
+                        (action.pool_position_kind == GamePoolSpawnPositionKind::target &&
+                         action.pool_position_target.kind == GameRuleTargetKind::spawn_index)) {
+                        const auto group_index = action.pool_position_kind == GamePoolSpawnPositionKind::initial
+                                                     ? scene.pools[action.pool_index].spawn_group_index
+                                                     : action.pool_position_target.spawn_group_index;
+                        const auto& group = scene.spawn_groups[group_index];
+                        const auto first_item = action.pool_position_kind == GamePoolSpawnPositionKind::initial
+                                                    ? 0U
+                                                    : action.pool_position_target.item_index;
+                        const auto item_count = action.pool_position_kind == GamePoolSpawnPositionKind::initial
+                                                    ? group.count
+                                                    : first_item + 1U;
+                        for (std::uint32_t item = first_item; item < item_count; ++item) {
+                            const auto column = item % group.placement.columns;
+                            const auto row = item / group.placement.columns;
+                            const double x = static_cast<double>(group.placement.origin.x) +
+                                             static_cast<double>(column) * group.placement.spacing.x +
+                                             group.transform.position_offset.x + action.pool_position_offset.x;
+                            const double y = static_cast<double>(group.placement.origin.y) +
+                                             static_cast<double>(row) * group.placement.spacing.y +
+                                             group.transform.position_offset.y + action.pool_position_offset.y;
+                            if (!representable_float(x) || !representable_float(y)) {
+                                return pool_invalid("GamePlan pool authored position plus offset is not representable");
+                            }
+                        }
+                    }
+                    if (action.has_result_state &&
+                        (plan.states[action.result_state_index].minimum > 0 ||
+                         plan.states[action.result_state_index].maximum < 1)) {
+                        return pool_invalid("GamePlan pool result state cannot represent zero and one");
+                    }
+                    break;
+                case GameRuleActionKind::release_to_pool:
+                    if (!version_0_4 || action.pool_index >= scene.pools.size() ||
+                        action.target.kind == GameRuleTargetKind::spawn_group ||
+                        (action.target.kind == GameRuleTargetKind::spawn_index &&
+                         action.target.spawn_group_index != scene.pools[action.pool_index].spawn_group_index) ||
+                        ((action.target.kind == GameRuleTargetKind::collision_a ||
+                          action.target.kind == GameRuleTargetKind::collision_b) &&
+                         !collision_target_owned_by_pool(action.target, action.pool_index)) ||
+                        (action.has_result_state && action.result_state_index >= plan.states.size())) {
+                        return pool_invalid("GamePlan release_to_pool action is invalid");
+                    }
+                    if (action.has_result_state &&
+                        (plan.states[action.result_state_index].minimum > 0 ||
+                         plan.states[action.result_state_index].maximum < 1)) {
+                        return pool_invalid("GamePlan pool result state cannot represent zero and one");
+                    }
+                    break;
+                case GameRuleActionKind::reset_pool:
+                    if (!version_0_4 || action.pool_index >= scene.pools.size()) {
+                        return pool_invalid("GamePlan reset_pool action is invalid");
                     }
                     break;
                 }
@@ -3699,7 +4677,7 @@ Result<GamePlan> compile_game_file(const std::filesystem::path& manifest_path) {
     auto schema_version = parse_game_schema_version(
         *version, source_name, "/schema_version", DiagnosticCode::game_manifest_invalid);
     if (!schema_version) return std::unexpected(std::move(schema_version.error()));
-    const bool version_0_3 = *schema_version == GameSchemaVersion::v0_3;
+    const bool version_0_3 = *schema_version != GameSchemaVersion::v0_2;
     if (auto rejected = reject_unknown(
             *document,
             version_0_3
@@ -3873,6 +4851,18 @@ Result<GamePlan> compile_game_file(const std::filesystem::path& manifest_path) {
         if (!scene) return std::unexpected(std::move(scene.error()));
         scene_indices.emplace(std::move(*id), static_cast<std::uint32_t>(plan.scenes.size()));
         plan.scenes.push_back(std::move(*scene));
+    }
+    if (plan.schema_version == GameSchemaVersion::v0_5) {
+        std::uint64_t total_contact_pairs = 0U;
+        for (const auto& scene : plan.scenes) {
+            total_contact_pairs += scene.max_contact_pairs;
+            if (total_contact_pairs > 1'000'000U) {
+                return std::unexpected(game_error(
+                    DiagnosticCode::game_collision_interaction_invalid,
+                    "Game scenes exceed the aggregate one-million contact-pair capacity",
+                    source_name, "/scenes"));
+            }
+        }
     }
 
     auto start = string_value(*document, "start_scene", source_name, "/");
@@ -4079,6 +5069,323 @@ Result<GameInputScriptPlan> compile_game_input_file(
     return plan;
 }
 
+Result<GameTestScriptPlan> compile_game_test_file(
+    const std::filesystem::path& test_path,
+    const GamePlan& game_plan) {
+    auto text = read_text_file(test_path, 64U * 1024U * 1024U, DiagnosticCode::input_invalid);
+    if (!text) return std::unexpected(std::move(text.error()));
+    auto document = parse_json(*text, test_path.string(), DiagnosticCode::input_invalid);
+    if (!document) return std::unexpected(std::move(document.error()));
+    const auto source = test_path.string();
+    if (auto rejected = reject_unknown(
+            *document, {"schema_version", "frames", "events", "assertions"}, source, "/",
+            DiagnosticCode::input_invalid); !rejected) {
+        return std::unexpected(std::move(rejected.error()));
+    }
+    auto version = string_value(*document, "schema_version", source, "/", DiagnosticCode::input_invalid);
+    if (!version) return std::unexpected(std::move(version.error()));
+    if (*version != "1") {
+        return std::unexpected(game_error(
+            DiagnosticCode::input_invalid, "Unsupported game-test schema version", source, "/schema_version"));
+    }
+    auto frames = u32_value(
+        *document, "frames", 1U, GameTestScriptPlan::max_frames, source, "/", DiagnosticCode::input_invalid);
+    if (!frames) return std::unexpected(std::move(frames.error()));
+    auto event_members = required(*document, "events", source, "/", DiagnosticCode::input_invalid);
+    if (!event_members) return std::unexpected(std::move(event_members.error()));
+    auto assertion_members = required(*document, "assertions", source, "/", DiagnosticCode::input_invalid);
+    if (!assertion_members) return std::unexpected(std::move(assertion_members.error()));
+    if (!(*event_members)->is_array() || (*event_members)->size() > GameTestScriptPlan::max_events ||
+        !(*assertion_members)->is_array() || (*assertion_members)->size() > GameTestScriptPlan::max_assertions) {
+        return std::unexpected(game_error(
+            DiagnosticCode::input_invalid, "game-test events or assertions exceed their bounded limits", source,
+            "/"));
+    }
+    std::unordered_map<std::string, std::uint32_t> actions{};
+    std::unordered_map<std::string, std::uint32_t> states{};
+    std::unordered_map<std::string, std::uint32_t> scenes{};
+    actions.reserve(game_plan.actions.size());
+    states.reserve(game_plan.states.size());
+    scenes.reserve(game_plan.scenes.size());
+    for (std::size_t index = 0U; index < game_plan.actions.size(); ++index) {
+        actions.emplace(std::string{game_plan.symbol(game_plan.actions[index].symbol)}, static_cast<std::uint32_t>(index));
+    }
+    for (std::size_t index = 0U; index < game_plan.states.size(); ++index) {
+        states.emplace(std::string{game_plan.symbol(game_plan.states[index].symbol)}, static_cast<std::uint32_t>(index));
+    }
+    for (std::size_t index = 0U; index < game_plan.scenes.size(); ++index) {
+        scenes.emplace(std::string{game_plan.symbol(game_plan.scenes[index].symbol)}, static_cast<std::uint32_t>(index));
+    }
+    const auto parse_comparison_value = [&](const Json& object,
+                                             const std::string_view pointer) -> Result<GameComparison> {
+        auto value = string_value(object, "op", source, pointer, DiagnosticCode::input_invalid);
+        if (!value) return std::unexpected(std::move(value.error()));
+        if (*value == "eq") return GameComparison::equal;
+        if (*value == "ne") return GameComparison::not_equal;
+        if (*value == "lt") return GameComparison::less;
+        if (*value == "le") return GameComparison::less_equal;
+        if (*value == "gt") return GameComparison::greater;
+        if (*value == "ge") return GameComparison::greater_equal;
+        return std::unexpected(game_error(
+            DiagnosticCode::input_invalid, "Assertion comparison must be eq, ne, lt, le, gt, or ge", source,
+            std::string{pointer} + "/op"));
+    };
+    const auto find_group = [&](const std::uint32_t scene_index,
+                                const std::string_view name,
+                                const std::string_view pointer) -> Result<std::uint32_t> {
+        const auto& groups = game_plan.scenes[scene_index].spawn_groups;
+        const auto found = std::find_if(groups.begin(), groups.end(), [&](const GameSpawnGroupPlan& group) {
+            return game_plan.symbol(group.symbol) == name;
+        });
+        if (found == groups.end()) {
+            return std::unexpected(game_error(
+                DiagnosticCode::input_invalid, "Assertion references an unknown spawn group", source, pointer));
+        }
+        return static_cast<std::uint32_t>(std::distance(groups.begin(), found));
+    };
+    GameTestScriptPlan plan{};
+    plan.frames = *frames;
+    plan.events.reserve((*event_members)->size());
+    std::uint64_t previous_event_tick = 0U;
+    bool first_event = true;
+    std::vector<std::uint32_t> actions_at_tick{};
+    actions_at_tick.reserve(game_plan.actions.size());
+    for (std::size_t index = 0U; index < (*event_members)->size(); ++index) {
+        const auto& item = (**event_members)[index];
+        const auto pointer = "/events/" + std::to_string(index);
+        if (auto rejected = reject_unknown(
+                item, {"tick", "action", "kind"}, source, pointer, DiagnosticCode::input_invalid); !rejected) {
+            return std::unexpected(std::move(rejected.error()));
+        }
+        auto tick = u64_value(item, "tick", 0U, plan.frames - 1U, source, pointer, DiagnosticCode::input_invalid);
+        if (!tick) return std::unexpected(std::move(tick.error()));
+        if (!first_event && *tick < previous_event_tick) {
+            return std::unexpected(game_error(
+                DiagnosticCode::input_invalid, "Test input ticks must be nondecreasing", source, pointer + "/tick"));
+        }
+        if (first_event || *tick != previous_event_tick) actions_at_tick.clear();
+        auto action = string_value(item, "action", source, pointer, DiagnosticCode::input_invalid);
+        if (!action) return std::unexpected(std::move(action.error()));
+        auto action_index = index_by_name(
+            actions, *action, "action", source, pointer + "/action", DiagnosticCode::input_invalid);
+        if (!action_index) return std::unexpected(std::move(action_index.error()));
+        if (std::find(actions_at_tick.begin(), actions_at_tick.end(), *action_index) != actions_at_tick.end()) {
+            return std::unexpected(game_error(
+                DiagnosticCode::input_invalid, "Duplicate test action at the same tick", source, pointer));
+        }
+        actions_at_tick.push_back(*action_index);
+        auto kind = string_value(item, "kind", source, pointer, DiagnosticCode::input_invalid);
+        if (!kind) return std::unexpected(std::move(kind.error()));
+        GameInputEventKind event_kind{};
+        if (*kind == "press") event_kind = GameInputEventKind::press;
+        else if (*kind == "release") event_kind = GameInputEventKind::release;
+        else if (*kind == "tap") event_kind = GameInputEventKind::tap;
+        else return std::unexpected(game_error(
+            DiagnosticCode::input_invalid, "Test input kind must be press, release, or tap", source,
+            pointer + "/kind"));
+        plan.events.push_back({*tick, *action_index, event_kind});
+        previous_event_tick = *tick;
+        first_event = false;
+    }
+    plan.assertions.reserve((*assertion_members)->size());
+    std::uint64_t previous_assertion_tick = 0U;
+    bool first_assertion = true;
+    for (std::size_t index = 0U; index < (*assertion_members)->size(); ++index) {
+        const auto& item = (**assertion_members)[index];
+        const auto pointer = "/assertions/" + std::to_string(index);
+        if (auto rejected = reject_unknown(
+                item, {"tick", "kind", "scene", "state", "group", "index", "op", "value", "active",
+                       "expected", "tolerance", "metric"},
+                source, pointer, DiagnosticCode::input_invalid); !rejected) {
+            return std::unexpected(std::move(rejected.error()));
+        }
+        auto tick = u64_value(item, "tick", 0U, plan.frames - 1U, source, pointer, DiagnosticCode::input_invalid);
+        if (!tick) return std::unexpected(std::move(tick.error()));
+        if (!first_assertion && *tick < previous_assertion_tick) {
+            return std::unexpected(game_error(
+                DiagnosticCode::input_invalid, "Test assertion ticks must be nondecreasing", source,
+                pointer + "/tick"));
+        }
+        auto kind = string_value(item, "kind", source, pointer, DiagnosticCode::input_invalid);
+        if (!kind) return std::unexpected(std::move(kind.error()));
+        GameTestAssertionPlan assertion{};
+        assertion.tick = *tick;
+        const auto parse_scene = [&]() -> Result<std::uint32_t> {
+            auto name = string_value(item, "scene", source, pointer, DiagnosticCode::input_invalid);
+            if (!name) return std::unexpected(std::move(name.error()));
+            return index_by_name(scenes, *name, "scene", source, pointer + "/scene", DiagnosticCode::input_invalid);
+        };
+        if (*kind == "current_scene") {
+            if (auto rejected = reject_unknown(
+                    item, {"tick", "kind", "scene"}, source, pointer,
+                    DiagnosticCode::input_invalid); !rejected) {
+                return std::unexpected(std::move(rejected.error()));
+            }
+            assertion.kind = GameTestAssertionKind::current_scene;
+            auto scene = parse_scene();
+            if (!scene) return std::unexpected(std::move(scene.error()));
+            assertion.scene_index = *scene;
+        } else if (*kind == "int_state") {
+            if (auto rejected = reject_unknown(
+                    item, {"tick", "kind", "state", "op", "value"}, source, pointer,
+                    DiagnosticCode::input_invalid); !rejected) {
+                return std::unexpected(std::move(rejected.error()));
+            }
+            assertion.kind = GameTestAssertionKind::int_state;
+            auto state = string_value(item, "state", source, pointer, DiagnosticCode::input_invalid);
+            if (!state) return std::unexpected(std::move(state.error()));
+            auto state_index = index_by_name(
+                states, *state, "integer state", source, pointer + "/state", DiagnosticCode::input_invalid);
+            if (!state_index) return std::unexpected(std::move(state_index.error()));
+            auto comparison = parse_comparison_value(item, pointer);
+            if (!comparison) return std::unexpected(std::move(comparison.error()));
+            auto value = i32_value(
+                item, "value", std::numeric_limits<std::int32_t>::min(), std::numeric_limits<std::int32_t>::max(),
+                source, pointer, DiagnosticCode::input_invalid);
+            if (!value) return std::unexpected(std::move(value.error()));
+            assertion.state_index = *state_index;
+            assertion.comparison = *comparison;
+            assertion.expected_integer = *value;
+        } else if (*kind == "group_active_count" || *kind == "entity_active" ||
+                   *kind == "position" || *kind == "velocity") {
+            auto scene = parse_scene();
+            if (!scene) return std::unexpected(std::move(scene.error()));
+            auto group_name = string_value(item, "group", source, pointer, DiagnosticCode::input_invalid);
+            if (!group_name) return std::unexpected(std::move(group_name.error()));
+            auto group = find_group(*scene, *group_name, pointer + "/group");
+            if (!group) return std::unexpected(std::move(group.error()));
+            assertion.scene_index = *scene;
+            assertion.spawn_group_index = *group;
+            if (*kind == "group_active_count") {
+                if (auto rejected = reject_unknown(
+                        item, {"tick", "kind", "scene", "group", "op", "value"}, source, pointer,
+                        DiagnosticCode::input_invalid); !rejected) {
+                    return std::unexpected(std::move(rejected.error()));
+                }
+                assertion.kind = GameTestAssertionKind::group_active_count;
+                auto comparison = parse_comparison_value(item, pointer);
+                if (!comparison) return std::unexpected(std::move(comparison.error()));
+                auto value = u32_value(
+                    item, "value", 0U, game_plan.scenes[*scene].spawn_groups[*group].count,
+                    source, pointer, DiagnosticCode::input_invalid);
+                if (!value) return std::unexpected(std::move(value.error()));
+                assertion.comparison = *comparison;
+                assertion.expected_unsigned = *value;
+            } else {
+                auto entity_index = u32_value(
+                    item, "index", 0U, game_plan.scenes[*scene].spawn_groups[*group].count - 1U,
+                    source, pointer, DiagnosticCode::input_invalid);
+                if (!entity_index) return std::unexpected(std::move(entity_index.error()));
+                assertion.item_index = *entity_index;
+                if (*kind == "entity_active") {
+                    if (auto rejected = reject_unknown(
+                            item, {"tick", "kind", "scene", "group", "index", "active"}, source,
+                            pointer, DiagnosticCode::input_invalid); !rejected) {
+                        return std::unexpected(std::move(rejected.error()));
+                    }
+                    assertion.kind = GameTestAssertionKind::entity_active;
+                    auto active = required(item, "active", source, pointer, DiagnosticCode::input_invalid);
+                    if (!active) return std::unexpected(std::move(active.error()));
+                    if (!(**active).is_boolean()) return std::unexpected(game_error(
+                        DiagnosticCode::input_invalid, "entity_active expected value must be boolean", source,
+                        pointer + "/active"));
+                    assertion.expected_active = (**active).get<bool>();
+                } else {
+                    if (auto rejected = reject_unknown(
+                            item, {"tick", "kind", "scene", "group", "index", "expected", "tolerance"},
+                            source, pointer, DiagnosticCode::input_invalid); !rejected) {
+                        return std::unexpected(std::move(rejected.error()));
+                    }
+                    assertion.kind = *kind == "position" ? GameTestAssertionKind::position
+                                                          : GameTestAssertionKind::velocity;
+                    if (assertion.kind == GameTestAssertionKind::velocity &&
+                        !game_plan.scenes[*scene].spawn_groups[*group].has_velocity) {
+                        return std::unexpected(game_error(
+                            DiagnosticCode::input_invalid,
+                            "Velocity assertion target does not have Velocity2D",
+                            source, pointer + "/group"));
+                    }
+                    auto expected = required(item, "expected", source, pointer, DiagnosticCode::input_invalid);
+                    if (!expected) return std::unexpected(std::move(expected.error()));
+                    auto vector = vec2(**expected, source, pointer + "/expected", DiagnosticCode::input_invalid);
+                    if (!vector) return std::unexpected(std::move(vector.error()));
+                    auto tolerance = optional_number(item, "tolerance", 1.0e-5F, source, pointer,
+                                                     DiagnosticCode::input_invalid);
+                    if (!tolerance) return std::unexpected(std::move(tolerance.error()));
+                    if (*tolerance < 0.0F || *tolerance > 1.0F) return std::unexpected(game_error(
+                        DiagnosticCode::input_invalid, "Assertion tolerance must be from zero to one", source,
+                        pointer + "/tolerance"));
+                    assertion.expected_vector = *vector;
+                    assertion.tolerance = *tolerance;
+                }
+            }
+        } else if (*kind == "runtime_metric") {
+            if (auto rejected = reject_unknown(
+                    item, {"tick", "kind", "metric", "op", "value"}, source, pointer,
+                    DiagnosticCode::input_invalid); !rejected) {
+                return std::unexpected(std::move(rejected.error()));
+            }
+            assertion.kind = GameTestAssertionKind::runtime_metric;
+            auto metric = string_value(item, "metric", source, pointer, DiagnosticCode::input_invalid);
+            if (!metric) return std::unexpected(std::move(metric.error()));
+            const std::pair<std::string_view, GameTestMetric> metrics[] = {
+                {"rule_executions", GameTestMetric::rule_executions},
+                {"condition_evaluations", GameTestMetric::condition_evaluations},
+                {"action_executions", GameTestMetric::action_executions},
+                {"grid_steps", GameTestMetric::grid_steps},
+                {"rejected_direction_changes", GameTestMetric::rejected_direction_changes},
+                {"follower_updates", GameTestMetric::follower_updates},
+                {"active_state_changes", GameTestMetric::active_state_changes},
+                {"relocations", GameTestMetric::relocations},
+                {"relocation_cells_scanned", GameTestMetric::relocation_cells_scanned},
+                {"collision_contacts", GameTestMetric::collision_contacts},
+                {"trigger_narrowphase_tests", GameTestMetric::trigger_narrowphase_tests},
+                {"contact_begins", GameTestMetric::contact_begins},
+                {"contact_ends", GameTestMetric::contact_ends},
+                {"stale_contact_events", GameTestMetric::stale_contact_events},
+                {"active_contact_pairs", GameTestMetric::active_contact_pairs},
+                {"peak_contact_pairs", GameTestMetric::peak_contact_pairs},
+                {"motion_segments", GameTestMetric::motion_segments},
+                {"linear_motion_updates", GameTestMetric::linear_motion_updates},
+                {"pool_acquire_attempts", GameTestMetric::pool_acquire_attempts},
+                {"pool_acquire_successes", GameTestMetric::pool_acquire_successes},
+                {"pool_releases", GameTestMetric::pool_releases},
+                {"pool_release_misses", GameTestMetric::pool_release_misses},
+                {"pool_exhaustions", GameTestMetric::pool_exhaustions},
+                {"pool_recycled_slots", GameTestMetric::pool_recycled_slots},
+                {"pool_expirations", GameTestMetric::pool_expirations},
+                {"pool_resets", GameTestMetric::pool_resets},
+                {"pool_lifetime_checks", GameTestMetric::pool_lifetime_checks},
+                {"active_pooled_entities", GameTestMetric::active_pooled_entities},
+                {"peak_active_pooled_entities", GameTestMetric::peak_active_pooled_entities},
+            };
+            const auto found = std::find_if(std::begin(metrics), std::end(metrics), [&](const auto& pair) {
+                return pair.first == *metric;
+            });
+            if (found == std::end(metrics)) return std::unexpected(game_error(
+                DiagnosticCode::input_invalid, "Assertion references an unsupported runtime metric", source,
+                pointer + "/metric"));
+            auto comparison = parse_comparison_value(item, pointer);
+            if (!comparison) return std::unexpected(std::move(comparison.error()));
+            auto value = u64_value(
+                item, "value", 0U, std::numeric_limits<std::uint64_t>::max(), source, pointer,
+                DiagnosticCode::input_invalid);
+            if (!value) return std::unexpected(std::move(value.error()));
+            assertion.metric = found->second;
+            assertion.comparison = *comparison;
+            assertion.expected_unsigned = *value;
+        } else {
+            return std::unexpected(game_error(
+                DiagnosticCode::input_invalid, "Unsupported game-test assertion kind", source,
+                pointer + "/kind"));
+        }
+        plan.assertions.push_back(assertion);
+        previous_assertion_tick = *tick;
+        first_assertion = false;
+    }
+    return plan;
+}
+
 void write_game_summary_json(JsonWriter& writer, const GamePlan& plan) {
     writer.begin_object();
     writer.key("schema_version");
@@ -4087,7 +5394,7 @@ void write_game_summary_json(JsonWriter& writer, const GamePlan& plan) {
     writer.value(plan.symbol(plan.name));
     writer.key("application");
     writer.value(plan.symbol(plan.application));
-    if (plan.schema_version == GameSchemaVersion::v0_3) {
+    if (plan.schema_version != GameSchemaVersion::v0_2) {
         writer.key("seed");
         writer.value(plan.seed);
     }
@@ -4137,9 +5444,95 @@ void write_game_summary_json(JsonWriter& writer, const GamePlan& plan) {
         writer.value(static_cast<std::uint64_t>(scene.world_capacity));
         writer.key("spawned_entities");
         writer.value(static_cast<std::uint64_t>(scene.total_spawn_count));
+        writer.key("max_contact_pairs");
+        writer.value(static_cast<std::uint64_t>(scene.max_contact_pairs));
         writer.key("systems");
         writer.begin_array();
         for (const auto& system : scene.systems) writer.value(to_string(system.operation));
+        writer.end_array();
+        writer.key("motion_ownership");
+        writer.begin_array();
+        for (const auto& system : scene.systems) {
+            if (system.operation != GameOperationId::linear_motion) continue;
+            writer.begin_object();
+            writer.key("system");
+            writer.value(plan.symbol(system.symbol));
+            writer.key("operation");
+            writer.value(to_string(system.operation));
+            writer.key("spawn_group");
+            writer.value(plan.symbol(scene.spawn_groups[system.spawn_group_index].symbol));
+            writer.end_object();
+        }
+        writer.end_array();
+        writer.key("collision_rules");
+        writer.begin_array();
+        for (std::size_t collision_index = 0U; collision_index < scene.collision_rules.size(); ++collision_index) {
+            const auto& collision_rule = scene.collision_rules[collision_index];
+            writer.begin_object();
+            writer.key("id");
+            if (plan.schema_version == GameSchemaVersion::v0_2) writer.null_value();
+            else writer.value(plan.symbol(collision_rule.symbol));
+            writer.key("a");
+            writer.value(plan.symbol(collision_rule.group_a));
+            writer.key("b");
+            writer.value(plan.symbol(collision_rule.group_b));
+            writer.key("interaction");
+            writer.value(to_string(collision_rule.interaction));
+            writer.key("event_phases");
+            writer.begin_array();
+            bool collision_phase = false;
+            bool begin_phase = false;
+            bool end_phase = false;
+            for (const auto& rule : scene.rules) {
+                if (rule.event.collision_rule_index != collision_index) continue;
+                collision_phase = collision_phase || rule.event.kind == GameRuleEventKind::collision;
+                begin_phase = begin_phase || rule.event.kind == GameRuleEventKind::contact_begin;
+                end_phase = end_phase || rule.event.kind == GameRuleEventKind::contact_end;
+            }
+            if (collision_phase) writer.value(to_string(GameRuleEventKind::collision));
+            if (begin_phase) writer.value(to_string(GameRuleEventKind::contact_begin));
+            if (end_phase) writer.value(to_string(GameRuleEventKind::contact_end));
+            writer.end_array();
+            writer.end_object();
+        }
+        writer.end_array();
+        writer.key("pools");
+        writer.begin_array();
+        for (const auto& pool : scene.pools) {
+            const auto& group = scene.spawn_groups[pool.spawn_group_index];
+            writer.begin_object();
+            writer.key("id");
+            writer.value(plan.symbol(pool.symbol));
+            writer.key("group");
+            writer.value(plan.symbol(group.symbol));
+            writer.key("capacity");
+            writer.value(static_cast<std::uint64_t>(group.count));
+            writer.key("initial_active");
+            writer.value(static_cast<std::uint64_t>(group.active_count));
+            writer.key("on_exhausted");
+            writer.value(to_string(pool.on_exhausted));
+            writer.end_object();
+        }
+        writer.end_array();
+        writer.key("pool_actions");
+        writer.begin_array();
+        for (const auto& rule : scene.rules) {
+            for (const auto& action : rule.actions) {
+                if (action.kind != GameRuleActionKind::spawn_from_pool &&
+                    action.kind != GameRuleActionKind::release_to_pool &&
+                    action.kind != GameRuleActionKind::reset_pool) {
+                    continue;
+                }
+                writer.begin_object();
+                writer.key("rule");
+                writer.value(plan.symbol(rule.symbol));
+                writer.key("kind");
+                writer.value(to_string(action.kind));
+                writer.key("pool");
+                writer.value(plan.symbol(scene.pools[action.pool_index].symbol));
+                writer.end_object();
+            }
+        }
         writer.end_array();
         writer.end_object();
     }

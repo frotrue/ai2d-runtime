@@ -28,15 +28,17 @@ enum class GameKey : std::uint8_t {
     enter,
     tab,
 };
-enum class GameSchemaVersion : std::uint8_t { v0_2, v0_3 };
+enum class GameSchemaVersion : std::uint8_t { v0_2, v0_3, v0_4, v0_5 };
 enum class GameOperationId : std::uint8_t {
     axis_control,
     set_velocity_on_press,
     simulate_collisions,
     grid_motion,
     follow_transform_chain,
+    linear_motion,
 };
 enum class GameBodyMotion : std::uint8_t { static_body, kinematic_body, dynamic_body };
+enum class GameCollisionInteraction : std::uint8_t { legacy, solid, trigger };
 enum class GameReactionKind : std::uint8_t { reflect, deactivate, add_int_state, reset_group, play_sound };
 enum class GameReactionTarget : std::uint8_t { a, b };
 enum class GameDirection : std::uint8_t { none, up, down, left, right };
@@ -47,6 +49,8 @@ enum class GameRuleEventKind : std::uint8_t {
     action_released,
     fixed_interval,
     collision,
+    contact_begin,
+    contact_end,
 };
 enum class GameRuleConditionKind : std::uint8_t { int_state, group_active_count };
 enum class GameRuleTargetKind : std::uint8_t { spawn_group, spawn_index, collision_a, collision_b };
@@ -61,7 +65,12 @@ enum class GameRuleActionKind : std::uint8_t {
     reset_group,
     play_sound,
     relocate_to_free_cell,
+    spawn_from_pool,
+    release_to_pool,
+    reset_pool,
 };
+enum class GamePoolExhaustionPolicy : std::uint8_t { skip, recycle_oldest };
+enum class GamePoolSpawnPositionKind : std::uint8_t { initial, constant, target };
 enum class GameInputEventKind : std::uint8_t { press, release, tap };
 enum class TransitionConditionKind : std::uint8_t {
     action_pressed,
@@ -168,6 +177,12 @@ struct GameSpawnGroupPlan final {
     bool has_collider{false};
 };
 
+struct GamePoolPlan final {
+    SymbolId symbol{0U};
+    std::uint32_t spawn_group_index{0U};
+    GamePoolExhaustionPolicy on_exhausted{GamePoolExhaustionPolicy::skip};
+};
+
 struct GameSystemPlan final {
     SymbolId symbol{0U};
     GameOperationId operation{GameOperationId::simulate_collisions};
@@ -202,6 +217,7 @@ struct GameCollisionRulePlan final {
     SymbolId symbol{0U};
     SymbolId group_a{0U};
     SymbolId group_b{0U};
+    GameCollisionInteraction interaction{GameCollisionInteraction::legacy};
     std::vector<GameReactionPlan> reactions{};
 };
 
@@ -245,6 +261,16 @@ struct GameRuleActionPlan final {
     std::vector<std::uint32_t> occupancy_group_indices{};
     bool has_result_state{false};
     std::uint32_t result_state_index{0U};
+    std::uint32_t pool_index{0U};
+    GamePoolSpawnPositionKind pool_position_kind{GamePoolSpawnPositionKind::initial};
+    Vec2 pool_position{};
+    GameRuleTargetPlan pool_position_target{};
+    Vec2 pool_position_offset{};
+    bool has_velocity_override{false};
+    bool has_rotation_override{false};
+    float rotation{0.0F};
+    bool has_lifetime{false};
+    std::uint32_t lifetime_ticks{0U};
 };
 
 struct GameRulePlan final {
@@ -280,6 +306,7 @@ struct GameScenePlan final {
     static constexpr std::size_t max_ui_elements = 1'024U;
     static constexpr std::size_t max_rules = 512U;
     static constexpr std::size_t max_grids = 64U;
+    static constexpr std::size_t max_pools = 1'024U;
     static constexpr std::uint32_t max_collision_capacity = 10'000'000U;
     static constexpr std::uint32_t max_impacts_per_dynamic = 16U;
     static constexpr std::uint64_t max_collision_cells = 1'000'000U;
@@ -294,9 +321,11 @@ struct GameScenePlan final {
     std::uint32_t max_colliders{10'000U};
     std::uint32_t max_grid_references{80'000U};
     std::uint32_t max_candidate_pairs{80'000U};
+    std::uint32_t max_contact_pairs{0U};
     std::uint32_t max_impacts{4U};
     std::vector<GameGridPlan> grids{};
     std::vector<GameSpawnGroupPlan> spawn_groups{};
+    std::vector<GamePoolPlan> pools{};
     std::vector<GameSystemPlan> systems{};
     std::vector<GameCollisionRulePlan> collision_rules{};
     std::vector<GameRulePlan> rules{};
@@ -328,7 +357,9 @@ struct FpsActionPlan final {
 
 struct GamePlan final {
     static constexpr std::string_view legacy_schema_version{"0.2"};
-    static constexpr std::string_view supported_schema_version{"0.3"};
+    static constexpr std::string_view event_action_schema_version{"0.3"};
+    static constexpr std::string_view object_pool_schema_version{"0.4"};
+    static constexpr std::string_view supported_schema_version{"0.5"};
     static constexpr std::size_t max_assets = 256U;
     static constexpr std::size_t max_actions = 64U;
     static constexpr std::size_t max_states = 64U;
@@ -373,6 +404,74 @@ struct GameInputScriptPlan final {
     std::uint64_t last_tick{0U};
 };
 
+enum class GameTestAssertionKind : std::uint8_t {
+    current_scene,
+    int_state,
+    group_active_count,
+    entity_active,
+    position,
+    velocity,
+    runtime_metric,
+};
+
+enum class GameTestMetric : std::uint8_t {
+    rule_executions,
+    condition_evaluations,
+    action_executions,
+    grid_steps,
+    rejected_direction_changes,
+    follower_updates,
+    active_state_changes,
+    relocations,
+    relocation_cells_scanned,
+    collision_contacts,
+    trigger_narrowphase_tests,
+    contact_begins,
+    contact_ends,
+    stale_contact_events,
+    active_contact_pairs,
+    peak_contact_pairs,
+    motion_segments,
+    linear_motion_updates,
+    pool_acquire_attempts,
+    pool_acquire_successes,
+    pool_releases,
+    pool_release_misses,
+    pool_exhaustions,
+    pool_recycled_slots,
+    pool_expirations,
+    pool_resets,
+    pool_lifetime_checks,
+    active_pooled_entities,
+    peak_active_pooled_entities,
+};
+
+struct GameTestAssertionPlan final {
+    std::uint64_t tick{0U};
+    GameTestAssertionKind kind{GameTestAssertionKind::current_scene};
+    GameComparison comparison{GameComparison::equal};
+    std::uint32_t scene_index{0U};
+    std::uint32_t state_index{0U};
+    std::uint32_t spawn_group_index{0U};
+    std::uint32_t item_index{0U};
+    std::int64_t expected_integer{0};
+    std::uint64_t expected_unsigned{0U};
+    bool expected_active{false};
+    Vec2 expected_vector{};
+    float tolerance{1.0e-5F};
+    GameTestMetric metric{GameTestMetric::rule_executions};
+};
+
+struct GameTestScriptPlan final {
+    static constexpr std::size_t max_events = 1'000'000U;
+    static constexpr std::size_t max_assertions = 4'096U;
+    static constexpr std::uint32_t max_frames = 1'000'000U;
+
+    std::uint32_t frames{1U};
+    std::vector<GameInputEventPlan> events{};
+    std::vector<GameTestAssertionPlan> assertions{};
+};
+
 [[nodiscard]] std::string_view to_string(GameAssetKind value) noexcept;
 [[nodiscard]] std::string_view to_string(GameOperationId value) noexcept;
 [[nodiscard]] std::string_view to_string(GameReactionKind value) noexcept;
@@ -382,10 +481,18 @@ struct GameInputScriptPlan final {
 [[nodiscard]] std::string_view to_string(GameDirection value) noexcept;
 [[nodiscard]] std::string_view to_string(GameRuleEventKind value) noexcept;
 [[nodiscard]] std::string_view to_string(GameRuleActionKind value) noexcept;
+[[nodiscard]] std::string_view to_string(GamePoolExhaustionPolicy value) noexcept;
+[[nodiscard]] std::string_view to_string(GamePoolSpawnPositionKind value) noexcept;
+[[nodiscard]] std::string_view to_string(GameCollisionInteraction value) noexcept;
+[[nodiscard]] std::string_view to_string(GameTestAssertionKind value) noexcept;
+[[nodiscard]] std::string_view to_string(GameTestMetric value) noexcept;
 
 [[nodiscard]] Result<GamePlan> compile_game_file(const std::filesystem::path& manifest_path);
 [[nodiscard]] Result<GameInputScriptPlan> compile_game_input_file(
     const std::filesystem::path& input_path,
+    const GamePlan& game_plan);
+[[nodiscard]] Result<GameTestScriptPlan> compile_game_test_file(
+    const std::filesystem::path& test_path,
     const GamePlan& game_plan);
 [[nodiscard]] Result<void> validate_game_plan(const GamePlan& plan);
 [[nodiscard]] std::uint64_t compute_game_plan_hash(const GamePlan& plan);

@@ -1,0 +1,21 @@
+{
+  "schema_version":"0.5","id":"course","world":{"capacity":4},"camera":{"position":[0,0],"half_extent":[16,9]},
+  "collision":{"bounds":[-18,-10,18,10],"cell_size":[2,2],"max_colliders":4,"max_grid_references":64,"max_candidate_pairs":16,"max_contact_pairs":8,"max_impacts":2},
+  "grids":[],
+  "spawn_groups":[
+    {"id":"runner","count":1,"placement":{"kind":"grid","origin":[-6,0],"spacing":[1,1],"columns":1},"velocity":{"linear":[6,0]},"sprite":{"texture":"sprites","size":[1,1],"uv":[0.25,0,0.25,1],"tint":[1,0.85,0.2,1]},"collider":{"half_extent":[0.5,0.5],"group":"runner","body":"kinematic"}},
+    {"id":"moving_zone","count":1,"placement":{"kind":"grid","origin":[0,0],"spacing":[1,1],"columns":1},"velocity":{"linear":[1,0]},"sprite":{"texture":"sprites","size":[3,3],"uv":[0.75,0,0.25,1],"tint":[0.2,0.8,1,0.45]},"collider":{"half_extent":[1.5,1.5],"group":"zone","body":"kinematic"}}
+  ],
+  "pools":[],
+  "systems":[
+    {"id":"runner_motion","operation":"linear_motion","spawn_group":"runner"},
+    {"id":"zone_motion","operation":"linear_motion","spawn_group":"moving_zone"},
+    {"id":"contacts","operation":"simulate_collisions"}
+  ],
+  "collision_rules":[{"id":"runner_in_zone","a":"runner","b":"zone","interaction":"trigger","reactions":[]}],
+  "rules":[
+    {"id":"entered","event":{"kind":"contact_begin","rule":"runner_in_zone"},"actions":[{"kind":"add_int_state","state":"begins","value":1}]},
+    {"id":"left","event":{"kind":"contact_end","rule":"runner_in_zone"},"actions":[{"kind":"add_int_state","state":"ends","value":1}]}
+  ],
+  "ui":[{"id":"hud","kind":"text","position":[480,35],"size":[760,50],"text":"CONTACT COURSE  BEGIN: {begins}  END: {ends}","font":"font","color":[1,1,1,1],"layer":1000,"text_scale":2}]
+}

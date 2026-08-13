@@ -24,6 +24,7 @@ def main() -> int:
     binary = Path(sys.argv[1])
     check(binary, "--help", expected="usage: ai2d_cli <command>")
     check(binary, "game", "--help", expected="--input-script FILE")
+    check(binary, "game", "verify", "--help", expected="--test-script FILE")
     return 0
 
 

@@ -1,0 +1,120 @@
+{
+  "schema_version": "0.4",
+  "seed": 404,
+  "name": "pool_dodger",
+  "organization": "ai2d",
+  "application": "pool_dodger",
+  "window": {
+    "title": "Pool Dodger",
+    "width": 960,
+    "height": 540,
+    "virtual_width": 960,
+    "virtual_height": 540,
+    "default_fps": "60"
+  },
+  "assets": [
+    {
+      "id": "pixel",
+      "kind": "png",
+      "path": "assets/pixel.png"
+    },
+    {
+      "id": "hud_font",
+      "kind": "font",
+      "path": "assets/font.png",
+      "metadata": "assets/font.json"
+    }
+  ],
+  "actions": [
+    {
+      "id": "move_left",
+      "keys": ["left", "a"]
+    },
+    {
+      "id": "move_right",
+      "keys": ["right", "d"]
+    },
+    {
+      "id": "restart",
+      "keys": ["enter", "space"],
+      "mouse_left": true
+    }
+  ],
+  "states": [
+    {
+      "id": "health",
+      "initial": 2,
+      "min": 0,
+      "max": 2
+    },
+    {
+      "id": "score",
+      "initial": 0,
+      "min": 0,
+      "max": 999
+    },
+    {
+      "id": "clock",
+      "initial": 0,
+      "min": 0,
+      "max": 1000
+    },
+    {
+      "id": "hazard_acquired",
+      "initial": 0,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "pickup_acquired",
+      "initial": 0,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "hazard_released",
+      "initial": 0,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "pickup_released",
+      "initial": 0,
+      "min": 0,
+      "max": 1
+    }
+  ],
+  "scenes": [
+    {
+      "id": "play",
+      "path": "scenes/play.json"
+    },
+    {
+      "id": "game_over",
+      "path": "scenes/game_over.json"
+    }
+  ],
+  "start_scene": "play",
+  "transitions": [
+    {
+      "from": "play",
+      "condition": {
+        "kind": "int_state_at_most",
+        "state": "health",
+        "value": 0
+      },
+      "to": "game_over",
+      "reset_scene": true
+    },
+    {
+      "from": "game_over",
+      "condition": {
+        "kind": "action_pressed",
+        "action": "restart"
+      },
+      "to": "play",
+      "reset_scene": true,
+      "reset_session": true
+    }
+  ]
+}

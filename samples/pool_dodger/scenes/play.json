@@ -1,0 +1,400 @@
+{
+  "schema_version": "0.4",
+  "id": "play",
+  "world": {
+    "capacity": 8
+  },
+  "camera": {
+    "position": [0, 0],
+    "half_extent": [8, 4.5]
+  },
+  "collision": {
+    "bounds": [-8, -4.5, 8, 4.5],
+    "cell_size": [1, 1],
+    "max_colliders": 8,
+    "max_grid_references": 256,
+    "max_candidate_pairs": 128,
+    "max_impacts": 4
+  },
+  "grids": [],
+  "spawn_groups": [
+    {
+      "id": "player",
+      "count": 1,
+      "active_count": 1,
+      "placement": {
+        "kind": "grid",
+        "origin": [0, -3.4],
+        "spacing": [0, 0],
+        "columns": 1
+      },
+      "velocity": {
+        "linear": [0, 0]
+      },
+      "sprite": {
+        "texture": "pixel",
+        "size": [0.9, 0.9],
+        "tint": [0.2, 0.85, 1, 1],
+        "layer": 2
+      },
+      "collider": {
+        "half_extent": [0.4, 0.4],
+        "group": "player",
+        "body": "kinematic",
+        "trigger": true
+      }
+    },
+    {
+      "id": "hazard_slots",
+      "count": 2,
+      "active_count": 0,
+      "placement": {
+        "kind": "grid",
+        "origin": [20, 20],
+        "spacing": [0, 0],
+        "columns": 1
+      },
+      "velocity": {
+        "linear": [0, 0]
+      },
+      "sprite": {
+        "texture": "pixel",
+        "size": [0.9, 0.9],
+        "tint": [1, 0.2, 0.25, 1],
+        "layer": 2
+      },
+      "collider": {
+        "half_extent": [0.4, 0.4],
+        "group": "hazard",
+        "body": "dynamic",
+        "trigger": true
+      }
+    },
+    {
+      "id": "pickup_slots",
+      "count": 1,
+      "active_count": 0,
+      "placement": {
+        "kind": "grid",
+        "origin": [20, 20],
+        "spacing": [0, 0],
+        "columns": 1
+      },
+      "velocity": {
+        "linear": [0, 0]
+      },
+      "sprite": {
+        "texture": "pixel",
+        "size": [0.65, 0.65],
+        "tint": [1, 0.85, 0.15, 1],
+        "layer": 3
+      },
+      "collider": {
+        "half_extent": [0.3, 0.3],
+        "group": "pickup",
+        "body": "dynamic",
+        "trigger": true
+      }
+    }
+  ],
+  "pools": [
+    {
+      "id": "hazards",
+      "group": "hazard_slots",
+      "on_exhausted": "recycle_oldest"
+    },
+    {
+      "id": "pickups",
+      "group": "pickup_slots",
+      "on_exhausted": "skip"
+    }
+  ],
+  "systems": [
+    {
+      "id": "move_player",
+      "operation": "axis_control",
+      "group": "player",
+      "negative_action": "move_left",
+      "positive_action": "move_right",
+      "speed": 5,
+      "min": -7.2,
+      "max": 7.2
+    },
+    {
+      "id": "collisions",
+      "operation": "simulate_collisions"
+    }
+  ],
+  "collision_rules": [
+    {
+      "id": "player_hits_hazard",
+      "a": "player",
+      "b": "hazard",
+      "reactions": [
+        {
+          "kind": "add_int_state",
+          "state": "health",
+          "value": -1
+        }
+      ]
+    },
+    {
+      "id": "player_gets_pickup",
+      "a": "player",
+      "b": "pickup",
+      "reactions": [
+        {
+          "kind": "add_int_state",
+          "state": "score",
+          "value": 10
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "advance_clock",
+      "event": {
+        "kind": "fixed_interval",
+        "interval_ticks": 1
+      },
+      "actions": [
+        {
+          "kind": "add_int_state",
+          "state": "clock",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "spawn_hazard_wave",
+      "event": {
+        "kind": "fixed_interval",
+        "interval_ticks": 1
+      },
+      "conditions": [
+        {
+          "kind": "int_state",
+          "state": "clock",
+          "op": "ge",
+          "value": 1
+        },
+        {
+          "kind": "int_state",
+          "state": "clock",
+          "op": "le",
+          "value": 4
+        }
+      ],
+      "actions": [
+        {
+          "kind": "spawn_from_pool",
+          "pool": "hazards",
+          "position": {
+            "kind": "constant",
+            "value": [0, 3.5]
+          },
+          "velocity": [0, -20],
+          "lifetime_ticks": 60,
+          "result_state": "hazard_acquired"
+        }
+      ]
+    },
+    {
+      "id": "spawn_expiring_pickup",
+      "event": {
+        "kind": "fixed_interval",
+        "interval_ticks": 1
+      },
+      "conditions": [
+        {
+          "kind": "int_state",
+          "state": "clock",
+          "op": "eq",
+          "value": 1
+        }
+      ],
+      "actions": [
+        {
+          "kind": "spawn_from_pool",
+          "pool": "pickups",
+          "position": {
+            "kind": "constant",
+            "value": [6.5, 2.5]
+          },
+          "lifetime_ticks": 2,
+          "result_state": "pickup_acquired"
+        }
+      ]
+    },
+    {
+      "id": "prove_pickup_skip",
+      "event": {
+        "kind": "fixed_interval",
+        "interval_ticks": 1
+      },
+      "conditions": [
+        {
+          "kind": "int_state",
+          "state": "clock",
+          "op": "eq",
+          "value": 2
+        }
+      ],
+      "actions": [
+        {
+          "kind": "spawn_from_pool",
+          "pool": "pickups",
+          "position": {
+            "kind": "constant",
+            "value": [6.5, 2.5]
+          },
+          "lifetime_ticks": 2,
+          "result_state": "pickup_acquired"
+        }
+      ]
+    },
+    {
+      "id": "spawn_collectible_pickup",
+      "event": {
+        "kind": "fixed_interval",
+        "interval_ticks": 1
+      },
+      "conditions": [
+        {
+          "kind": "int_state",
+          "state": "clock",
+          "op": "eq",
+          "value": 4
+        }
+      ],
+      "actions": [
+        {
+          "kind": "spawn_from_pool",
+          "pool": "pickups",
+          "position": {
+            "kind": "constant",
+            "value": [0, -3.4]
+          },
+          "lifetime_ticks": 20,
+          "result_state": "pickup_acquired"
+        }
+      ]
+    },
+    {
+      "id": "reuse_released_pickup",
+      "event": {
+        "kind": "fixed_interval",
+        "interval_ticks": 1
+      },
+      "conditions": [
+        {
+          "kind": "int_state",
+          "state": "clock",
+          "op": "eq",
+          "value": 5
+        }
+      ],
+      "actions": [
+        {
+          "kind": "spawn_from_pool",
+          "pool": "pickups",
+          "position": {
+            "kind": "constant",
+            "value": [0, -3.4]
+          },
+          "lifetime_ticks": 20,
+          "result_state": "pickup_acquired"
+        }
+      ]
+    },
+    {
+      "id": "release_hit_hazard",
+      "event": {
+        "kind": "collision",
+        "rule": "player_hits_hazard"
+      },
+      "actions": [
+        {
+          "kind": "release_to_pool",
+          "pool": "hazards",
+          "target": {
+            "kind": "collision_b"
+          },
+          "result_state": "hazard_released"
+        }
+      ]
+    },
+    {
+      "id": "release_collected_pickup",
+      "event": {
+        "kind": "collision",
+        "rule": "player_gets_pickup"
+      },
+      "actions": [
+        {
+          "kind": "release_to_pool",
+          "pool": "pickups",
+          "target": {
+            "kind": "collision_b"
+          },
+          "result_state": "pickup_released"
+        }
+      ]
+    }
+  ],
+  "ui": [
+    {
+      "id": "hud_bar",
+      "kind": "panel",
+      "position": [480, 30],
+      "size": [920, 44],
+      "color": [0.03, 0.05, 0.1, 0.92],
+      "layer": 10
+    },
+    {
+      "id": "title",
+      "kind": "text",
+      "position": [170, 30],
+      "size": [260, 32],
+      "text": "POOL DODGER",
+      "font": "hud_font",
+      "text_color": [0.2, 0.85, 1, 1],
+      "layer": 11,
+      "text_scale": 4
+    },
+    {
+      "id": "health_text",
+      "kind": "text",
+      "position": [470, 30],
+      "size": [210, 32],
+      "text": "HEALTH {health}",
+      "font": "hud_font",
+      "text_color": [1, 0.35, 0.35, 1],
+      "layer": 11,
+      "text_scale": 4
+    },
+    {
+      "id": "score_text",
+      "kind": "text",
+      "position": [750, 30],
+      "size": [210, 32],
+      "text": "SCORE {score}",
+      "font": "hud_font",
+      "text_color": [1, 0.9, 0.25, 1],
+      "layer": 11,
+      "text_scale": 4
+    },
+    {
+      "id": "instructions",
+      "kind": "text",
+      "position": [480, 510],
+      "size": [560, 28],
+      "text": "ARROWS OR A D TO MOVE",
+      "font": "hud_font",
+      "text_color": [0.75, 0.82, 0.92, 1],
+      "layer": 11,
+      "text_scale": 3
+    }
+  ]
+}

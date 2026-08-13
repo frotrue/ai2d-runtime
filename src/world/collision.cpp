@@ -122,6 +122,15 @@ public:
         EntityState2D* state{nullptr};
         Vec2 start_center{};
         Vec2 sweep_velocity{};
+        std::uint32_t segment_begin{0U};
+        std::uint32_t segment_count{0U};
+    };
+
+    struct MotionSegment final {
+        float start_time{0.0F};
+        float duration{0.0F};
+        Vec2 start_center{};
+        Vec2 velocity{};
     };
 
     struct GridReference final {
@@ -137,6 +146,10 @@ public:
     std::vector<GridReference> references{};
     std::vector<std::uint64_t> candidate_pairs{};
     std::vector<CollisionEvent2D> collision_events{};
+    std::vector<MotionSegment> motion_segments{};
+    std::vector<CollisionContactPair2D> active_contacts{};
+    std::vector<CollisionContactPair2D> next_contacts{};
+    std::uint32_t peak_contact_pairs{0U};
     bool ready{false};
 
     [[nodiscard]] bool active(const Proxy& proxy) const noexcept {
@@ -176,6 +189,7 @@ public:
         bool& first_is_a) const noexcept {
         for (std::size_t index = 0U; index < rules.size(); ++index) {
             const auto& rule = rules[index];
+            if (rule.interaction == CollisionInteraction2D::trigger) continue;
             if (first.collider->group == rule.group_a && second.collider->group == rule.group_b) {
                 rule_index = static_cast<std::uint32_t>(index);
                 first_is_a = true;
@@ -188,6 +202,31 @@ public:
             }
         }
         return nullptr;
+    }
+
+    [[nodiscard]] static bool contact_less(
+        const CollisionContactPair2D& left,
+        const CollisionContactPair2D& right) noexcept {
+        if (left.rule_index != right.rule_index) return left.rule_index < right.rule_index;
+        if (left.entity_a.index != right.entity_a.index) return left.entity_a.index < right.entity_a.index;
+        if (left.entity_a.generation != right.entity_a.generation) {
+            return left.entity_a.generation < right.entity_a.generation;
+        }
+        if (left.entity_b.index != right.entity_b.index) return left.entity_b.index < right.entity_b.index;
+        return left.entity_b.generation < right.entity_b.generation;
+    }
+
+    [[nodiscard]] static bool overlaps(const Proxy& a, const Proxy& b) noexcept {
+        const auto center_a = Vec2{
+            a.transform->position.x + a.collider->offset.x,
+            a.transform->position.y + a.collider->offset.y,
+        };
+        const auto center_b = Vec2{
+            b.transform->position.x + b.collider->offset.x,
+            b.transform->position.y + b.collider->offset.y,
+        };
+        return std::abs(center_a.x - center_b.x) <= a.collider->half_extent.x + b.collider->half_extent.x &&
+               std::abs(center_a.y - center_b.y) <= a.collider->half_extent.y + b.collider->half_extent.y;
     }
 
     [[nodiscard]] bool deactivate(Proxy& proxy) noexcept {
@@ -233,6 +272,7 @@ Result<void> CollisionGrid2D::initialize(const CollisionGridConfig2D& config) {
         config.max_colliders == 0U || config.max_colliders > 10'000U ||
         config.max_grid_references == 0U || config.max_grid_references > 10'000'000U ||
         config.max_candidate_pairs == 0U || config.max_candidate_pairs > 10'000'000U ||
+        config.max_contact_pairs > 100'000U || config.max_contact_pairs > config.max_candidate_pairs ||
         config.max_impacts_per_dynamic == 0U || config.max_impacts_per_dynamic > 16U) {
         return std::unexpected(collision_error(DiagnosticCode::input_invalid, "Collision grid configuration is invalid"));
     }
@@ -251,8 +291,20 @@ Result<void> CollisionGrid2D::initialize(const CollisionGridConfig2D& config) {
     impl_->cell_heads.resize(static_cast<std::size_t>(columns * rows), -1);
     impl_->references.reserve(config.max_grid_references);
     impl_->candidate_pairs.reserve(config.max_candidate_pairs);
-    impl_->collision_events.reserve(
-        static_cast<std::size_t>(config.max_colliders) * config.max_impacts_per_dynamic);
+    const auto impact_event_capacity = static_cast<std::size_t>(config.max_colliders) *
+                                       config.max_impacts_per_dynamic;
+    const auto contact_event_capacity = static_cast<std::size_t>(config.max_contact_pairs) * 2U;
+    if (impact_event_capacity > std::numeric_limits<std::size_t>::max() - contact_event_capacity) {
+        return std::unexpected(collision_error(
+            DiagnosticCode::collision_contact_capacity_exceeded,
+            "Collision event capacity arithmetic overflowed"));
+    }
+    impl_->collision_events.reserve(impact_event_capacity + contact_event_capacity);
+    const auto motion_capacity = static_cast<std::size_t>(config.max_colliders) *
+                                 (static_cast<std::size_t>(config.max_impacts_per_dynamic) + 1U);
+    impl_->motion_segments.reserve(motion_capacity);
+    impl_->active_contacts.reserve(config.max_contact_pairs);
+    impl_->next_contacts.reserve(config.max_contact_pairs);
     impl_->ready = true;
     return {};
 }
@@ -265,7 +317,10 @@ Result<CollisionMetrics2D> CollisionGrid2D::simulate(
         return std::unexpected(collision_error(DiagnosticCode::input_invalid, "Collision simulation input is invalid"));
     }
     for (const auto& rule : rules) {
-        if (rule.group_a == rule.group_b || rule.reaction_count > CollisionRule2D::max_reactions) {
+        if (rule.group_a == rule.group_b || rule.reaction_count > CollisionRule2D::max_reactions ||
+            static_cast<std::uint32_t>(rule.interaction) >
+                static_cast<std::uint32_t>(CollisionInteraction2D::trigger) ||
+            (rule.interaction == CollisionInteraction2D::trigger && rule.reaction_count != 0U)) {
             return std::unexpected(collision_error(
                 DiagnosticCode::input_invalid,
                 "Collision rule count or group pairing is invalid"));
@@ -285,10 +340,13 @@ Result<CollisionMetrics2D> CollisionGrid2D::simulate(
     CollisionMetrics2D metrics{};
     metrics.grid_reference_capacity = impl_->config.max_grid_references;
     metrics.candidate_capacity = impl_->config.max_candidate_pairs;
+    metrics.contact_capacity = impl_->config.max_contact_pairs;
     impl_->proxies.clear();
     impl_->references.clear();
     impl_->candidate_pairs.clear();
     impl_->collision_events.clear();
+    impl_->motion_segments.clear();
+    impl_->next_contacts.clear();
     std::fill(impl_->cell_heads.begin(), impl_->cell_heads.end(), -1);
 
     {
@@ -428,16 +486,18 @@ Result<CollisionMetrics2D> CollisionGrid2D::simulate(
         if (first > second) std::swap(first, second);
         const auto& first_proxy = impl_->proxies[first];
         const auto& second_proxy = impl_->proxies[second];
-        if (first_proxy.collider->motion != BodyMotion2D::dynamic_body &&
-            second_proxy.collider->motion != BodyMotion2D::dynamic_body) {
-            return {};
+        bool has_matching_rule = false;
+        bool has_solid_rule = false;
+        for (const auto& rule : rules) {
+            const bool matches =
+                (first_proxy.collider->group == rule.group_a && second_proxy.collider->group == rule.group_b) ||
+                (first_proxy.collider->group == rule.group_b && second_proxy.collider->group == rule.group_a);
+            has_matching_rule = has_matching_rule || matches;
+            has_solid_rule = has_solid_rule ||
+                             (matches && rule.interaction != CollisionInteraction2D::trigger);
         }
-        std::uint32_t ignored_index = 0U;
-        bool ignored_orientation = false;
-        if (impl_->find_rule(first_proxy, second_proxy, rules, ignored_index, ignored_orientation) == nullptr) {
-            return {};
-        }
-        if (first_proxy.collider->motion == BodyMotion2D::dynamic_body &&
+        if (!has_matching_rule) return {};
+        if (has_solid_rule && first_proxy.collider->motion == BodyMotion2D::dynamic_body &&
             second_proxy.collider->motion == BodyMotion2D::dynamic_body) {
             return std::unexpected(collision_error(
                 DiagnosticCode::input_invalid,
@@ -479,10 +539,34 @@ Result<CollisionMetrics2D> CollisionGrid2D::simulate(
     canonicalize_candidate_pairs();
     metrics.candidate_pairs = static_cast<std::uint32_t>(impl_->candidate_pairs.size());
 
+    const auto append_motion_segment = [&](Impl::Proxy& proxy,
+                                           const float start_time,
+                                           const float duration,
+                                           const Vec2 start_center,
+                                           const Vec2 segment_velocity) -> Result<void> {
+        if (impl_->motion_segments.size() >= impl_->motion_segments.capacity()) {
+            return std::unexpected(collision_error(
+                DiagnosticCode::collision_contact_capacity_exceeded,
+                "Motion segment capacity was exceeded"));
+        }
+        impl_->motion_segments.push_back({start_time, duration, start_center, segment_velocity});
+        ++proxy.segment_count;
+        ++metrics.motion_segments;
+        return {};
+    };
+
     for (std::size_t moving_index = 0U; moving_index < impl_->proxies.size(); ++moving_index) {
         auto& moving = impl_->proxies[moving_index];
-        if (!impl_->active(moving) || moving.collider->motion != BodyMotion2D::dynamic_body ||
-            moving.velocity == nullptr) {
+        moving.segment_begin = static_cast<std::uint32_t>(impl_->motion_segments.size());
+        moving.segment_count = 0U;
+        if (!impl_->active(moving)) {
+            continue;
+        }
+        if (moving.collider->motion != BodyMotion2D::dynamic_body || moving.velocity == nullptr) {
+            if (auto added = append_motion_segment(
+                    moving, 0.0F, delta_seconds, moving.start_center, impl_->velocity(moving)); !added) {
+                return std::unexpected(std::move(added.error()));
+            }
             continue;
         }
         float remaining = delta_seconds;
@@ -589,12 +673,20 @@ Result<CollisionMetrics2D> CollisionGrid2D::simulate(
                 }
             }
             if (earliest_other == std::numeric_limits<std::uint32_t>::max()) {
+                if (auto added = append_motion_segment(
+                        moving, delta_seconds - remaining, remaining, moving_center, moving_velocity); !added) {
+                    return std::unexpected(std::move(added.error()));
+                }
                 moving.transform->position.x += moving.velocity->linear.x * remaining;
                 moving.transform->position.y += moving.velocity->linear.y * remaining;
                 remaining = 0.0F;
                 break;
             }
 
+            if (auto added = append_motion_segment(
+                    moving, delta_seconds - remaining, earliest, moving_center, moving_velocity); !added) {
+                return std::unexpected(std::move(added.error()));
+            }
             moving.transform->position.x += moving.velocity->linear.x * earliest;
             moving.transform->position.y += moving.velocity->linear.y * earliest;
             remaining -= earliest;
@@ -608,12 +700,22 @@ Result<CollisionMetrics2D> CollisionGrid2D::simulate(
                     DiagnosticCode::collision_candidate_capacity_exceeded,
                     "Collision event capacity was exceeded"));
             }
+            const auto event_time = delta_seconds - remaining;
+            const auto other_center = impl_->center_at(other, event_time);
+            const Vec2 moving_position = moving.transform->position;
+            const Vec2 other_position{
+                other_center.x - other.collider->offset.x,
+                other_center.y - other.collider->offset.y,
+            };
             impl_->collision_events.push_back({
                 earliest_rule,
                 earliest_moving_is_a ? moving.entity : other.entity,
                 earliest_moving_is_a ? other.entity : moving.entity,
                 normal_for_rule_a,
-                delta_seconds - remaining,
+                event_time,
+                earliest_moving_is_a ? moving_position : other_position,
+                earliest_moving_is_a ? other_position : moving_position,
+                CollisionEventPhase2D::collision,
             });
             ++metrics.contacts;
 
@@ -656,6 +758,183 @@ Result<CollisionMetrics2D> CollisionGrid2D::simulate(
             ++metrics.iteration_limit_hits;
         }
     }
+
+    const auto append_contact_event = [&](const CollisionContactPair2D& pair,
+                                          const CollisionEventPhase2D phase,
+                                          const float time,
+                                          const Vec2 normal,
+                                          const Vec2 position_a,
+                                          const Vec2 position_b) -> Result<void> {
+        if (impl_->collision_events.size() >= impl_->collision_events.capacity()) {
+            return std::unexpected(collision_error(
+                DiagnosticCode::collision_contact_capacity_exceeded,
+                "Collision contact event capacity was exceeded"));
+        }
+        impl_->collision_events.push_back({
+            pair.rule_index, pair.entity_a, pair.entity_b, normal, time,
+            position_a, position_b, phase,
+        });
+        return {};
+    };
+
+    for (const auto packed : impl_->candidate_pairs) {
+        const auto first_index = static_cast<std::uint32_t>(packed >> 32U);
+        const auto second_index = static_cast<std::uint32_t>(packed & 0xFFFFFFFFU);
+        auto& first = impl_->proxies[first_index];
+        auto& second = impl_->proxies[second_index];
+        if (!impl_->active(first) || !impl_->active(second)) continue;
+        for (std::size_t rule_index = 0U; rule_index < rules.size(); ++rule_index) {
+            const auto& rule = rules[rule_index];
+            if (rule.interaction != CollisionInteraction2D::trigger) continue;
+            const bool first_is_a = first.collider->group == rule.group_a && second.collider->group == rule.group_b;
+            const bool second_is_a = first.collider->group == rule.group_b && second.collider->group == rule.group_a;
+            if (!first_is_a && !second_is_a) continue;
+            auto& a = first_is_a ? first : second;
+            auto& b = first_is_a ? second : first;
+            const CollisionContactPair2D pair{
+                static_cast<std::uint32_t>(rule_index), a.entity, b.entity,
+            };
+            const bool was_active = std::binary_search(
+                impl_->active_contacts.begin(), impl_->active_contacts.end(), pair, Impl::contact_less);
+            bool swept_contact = false;
+            float earliest_time = delta_seconds;
+            Vec2 earliest_normal{};
+            Vec2 earliest_position_a{};
+            Vec2 earliest_position_b{};
+            for (std::uint32_t a_offset = 0U; a_offset < a.segment_count; ++a_offset) {
+                const auto& segment_a = impl_->motion_segments[a.segment_begin + a_offset];
+                for (std::uint32_t b_offset = 0U; b_offset < b.segment_count; ++b_offset) {
+                    const auto& segment_b = impl_->motion_segments[b.segment_begin + b_offset];
+                    const float overlap_start = std::max(segment_a.start_time, segment_b.start_time);
+                    const float overlap_end = std::min(
+                        segment_a.start_time + segment_a.duration,
+                        segment_b.start_time + segment_b.duration);
+                    if (overlap_end < overlap_start) continue;
+                    const Vec2 center_a{
+                        segment_a.start_center.x + segment_a.velocity.x * (overlap_start - segment_a.start_time),
+                        segment_a.start_center.y + segment_a.velocity.y * (overlap_start - segment_a.start_time),
+                    };
+                    const Vec2 center_b{
+                        segment_b.start_center.x + segment_b.velocity.x * (overlap_start - segment_b.start_time),
+                        segment_b.start_center.y + segment_b.velocity.y * (overlap_start - segment_b.start_time),
+                    };
+                    ++metrics.trigger_narrowphase_tests;
+                    const auto hit = swept_aabb(
+                        center_a, a.collider->half_extent, segment_a.velocity,
+                        center_b, b.collider->half_extent, segment_b.velocity,
+                        overlap_end - overlap_start);
+                    const float contact_time = overlap_start + hit.time;
+                    if (!hit.hit || (swept_contact && contact_time >= earliest_time)) continue;
+                    swept_contact = true;
+                    earliest_time = contact_time;
+                    earliest_normal = hit.normal;
+                    const Vec2 contact_center_a{
+                        center_a.x + segment_a.velocity.x * hit.time,
+                        center_a.y + segment_a.velocity.y * hit.time,
+                    };
+                    const Vec2 contact_center_b{
+                        center_b.x + segment_b.velocity.x * hit.time,
+                        center_b.y + segment_b.velocity.y * hit.time,
+                    };
+                    earliest_position_a = {
+                        contact_center_a.x - a.collider->offset.x,
+                        contact_center_a.y - a.collider->offset.y,
+                    };
+                    earliest_position_b = {
+                        contact_center_b.x - b.collider->offset.x,
+                        contact_center_b.y - b.collider->offset.y,
+                    };
+                }
+            }
+            const bool final_overlap = Impl::overlaps(a, b);
+            if (final_overlap) {
+                if (impl_->next_contacts.size() >= impl_->config.max_contact_pairs) {
+                    return std::unexpected(collision_error(
+                        DiagnosticCode::collision_contact_capacity_exceeded,
+                        "Active trigger contacts exceed max_contact_pairs"));
+                }
+                impl_->next_contacts.push_back(pair);
+            }
+            if (!was_active && (swept_contact || final_overlap)) {
+                if (!swept_contact) {
+                    earliest_position_a = a.transform->position;
+                    earliest_position_b = b.transform->position;
+                }
+                if (auto added = append_contact_event(
+                        pair, CollisionEventPhase2D::contact_begin, earliest_time, earliest_normal,
+                        earliest_position_a, earliest_position_b); !added) {
+                    return std::unexpected(std::move(added.error()));
+                }
+                ++metrics.contact_begins;
+            }
+        }
+    }
+    std::sort(impl_->next_contacts.begin(), impl_->next_contacts.end(), Impl::contact_less);
+    impl_->next_contacts.erase(
+        std::unique(impl_->next_contacts.begin(), impl_->next_contacts.end()), impl_->next_contacts.end());
+    const auto proxy_for = [&](const EntityId entity) -> Impl::Proxy* {
+        const auto found = std::lower_bound(
+            impl_->proxies.begin(), impl_->proxies.end(), entity,
+            [](const Impl::Proxy& proxy, const EntityId value) {
+                if (proxy.entity.index != value.index) return proxy.entity.index < value.index;
+                return proxy.entity.generation < value.generation;
+            });
+        return found != impl_->proxies.end() && found->entity == entity ? &*found : nullptr;
+    };
+    std::size_t previous_index = 0U;
+    std::size_t next_index = 0U;
+    while (previous_index < impl_->active_contacts.size()) {
+        const auto& previous = impl_->active_contacts[previous_index];
+        while (next_index < impl_->next_contacts.size() &&
+               Impl::contact_less(impl_->next_contacts[next_index], previous)) {
+            ++next_index;
+        }
+        if (next_index < impl_->next_contacts.size() && impl_->next_contacts[next_index] == previous) {
+            ++previous_index;
+            ++next_index;
+            continue;
+        }
+        if (previous.rule_index >= rules.size()) {
+            return std::unexpected(collision_error(
+                DiagnosticCode::runtime_contact_state_invalid,
+                "Active contact references an invalid collision rule"));
+        }
+        auto* a = proxy_for(previous.entity_a);
+        auto* b = proxy_for(previous.entity_b);
+        if (a == nullptr || b == nullptr) {
+            return std::unexpected(collision_error(
+                DiagnosticCode::runtime_contact_state_invalid,
+                "Active contact references an entity without a collider"));
+        }
+        if (impl_->active(*a) && impl_->active(*b)) {
+            if (auto added = append_contact_event(
+                    previous, CollisionEventPhase2D::contact_end, delta_seconds, {},
+                    a->transform->position, b->transform->position); !added) {
+                return std::unexpected(std::move(added.error()));
+            }
+            ++metrics.contact_ends;
+        }
+        ++previous_index;
+    }
+    impl_->active_contacts.swap(impl_->next_contacts);
+    impl_->peak_contact_pairs = std::max(
+        impl_->peak_contact_pairs, static_cast<std::uint32_t>(impl_->active_contacts.size()));
+    metrics.active_contact_pairs = static_cast<std::uint32_t>(impl_->active_contacts.size());
+    metrics.peak_contact_pairs = impl_->peak_contact_pairs;
+    std::sort(
+        impl_->collision_events.begin(), impl_->collision_events.end(),
+        [](const CollisionEvent2D& left, const CollisionEvent2D& right) {
+            const bool left_end = left.phase == CollisionEventPhase2D::contact_end;
+            const bool right_end = right.phase == CollisionEventPhase2D::contact_end;
+            if (left_end != right_end) return !left_end;
+            if (!left_end && left.time_of_impact != right.time_of_impact) {
+                return left.time_of_impact < right.time_of_impact;
+            }
+            if (left.rule_index != right.rule_index) return left.rule_index < right.rule_index;
+            if (left.entity_a.index != right.entity_a.index) return left.entity_a.index < right.entity_a.index;
+            if (left.entity_b.index != right.entity_b.index) return left.entity_b.index < right.entity_b.index;
+            return static_cast<std::uint32_t>(left.phase) < static_cast<std::uint32_t>(right.phase);
+        });
     canonicalize_candidate_pairs();
     metrics.candidate_pairs = static_cast<std::uint32_t>(impl_->candidate_pairs.size());
     world.record_system_invocation();
@@ -663,6 +942,53 @@ Result<CollisionMetrics2D> CollisionGrid2D::simulate(
 }
 
 std::span<const CollisionEvent2D> CollisionGrid2D::events() const noexcept { return impl_->collision_events; }
+std::span<const CollisionContactPair2D> CollisionGrid2D::active_contact_pairs() const noexcept {
+    return impl_->active_contacts;
+}
+
+Result<void> CollisionGrid2D::restore_contact_pairs(const std::span<const CollisionContactPair2D> pairs) {
+    if (!impl_->ready || pairs.size() > impl_->config.max_contact_pairs ||
+        !std::is_sorted(pairs.begin(), pairs.end(), Impl::contact_less) ||
+        std::adjacent_find(pairs.begin(), pairs.end()) != pairs.end()) {
+        return std::unexpected(collision_error(
+            DiagnosticCode::runtime_contact_state_invalid,
+            "Contact snapshot is invalid or exceeds its configured capacity"));
+    }
+    impl_->active_contacts.assign(pairs.begin(), pairs.end());
+    impl_->peak_contact_pairs = std::max(
+        impl_->peak_contact_pairs, static_cast<std::uint32_t>(impl_->active_contacts.size()));
+    return {};
+}
+
+void CollisionGrid2D::discard_contacts_for(const EntityId entity) noexcept {
+    impl_->active_contacts.erase(
+        std::remove_if(
+            impl_->active_contacts.begin(), impl_->active_contacts.end(),
+            [&](const CollisionContactPair2D& pair) {
+                return pair.entity_a == entity || pair.entity_b == entity;
+            }),
+        impl_->active_contacts.end());
+}
+
+void CollisionGrid2D::clear_contacts() noexcept { impl_->active_contacts.clear(); }
+
+std::uint64_t CollisionGrid2D::contact_state_checksum() const noexcept {
+    std::uint64_t hash = 14'695'981'039'346'656'037ULL;
+    const auto mix = [&](const std::uint32_t value) {
+        for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
+            hash ^= static_cast<std::uint8_t>(value >> shift);
+            hash *= 1'099'511'628'211ULL;
+        }
+    };
+    for (const auto& pair : impl_->active_contacts) {
+        mix(pair.rule_index);
+        mix(pair.entity_a.index);
+        mix(pair.entity_a.generation);
+        mix(pair.entity_b.index);
+        mix(pair.entity_b.generation);
+    }
+    return hash;
+}
 bool CollisionGrid2D::initialized() const noexcept { return impl_->ready; }
 
 } // namespace ai2d

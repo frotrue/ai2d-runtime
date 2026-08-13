@@ -1,0 +1,37 @@
+{
+  "schema_version":"0.5","id":"play","world":{"capacity":16},"camera":{"position":[0,0],"half_extent":[16,9]},
+  "collision":{"bounds":[-18,-10,18,10],"cell_size":[2,2],"max_colliders":16,"max_grid_references":256,"max_candidate_pairs":128,"max_contact_pairs":32,"max_impacts":4},
+  "grids":[],
+  "spawn_groups":[
+    {"id":"base","count":1,"placement":{"kind":"grid","origin":[-14,0],"spacing":[1,1],"columns":1},"sprite":{"texture":"sprites","size":[1,8],"uv":[0,0,0.25,1],"tint":[0.2,0.8,1,1]},"collider":{"half_extent":[0.5,4],"group":"base","body":"static"}},
+    {"id":"bullet_slots","count":4,"active_count":0,"placement":{"kind":"grid","origin":[-10,0],"spacing":[0,0],"columns":1},"velocity":{"linear":[0,0]},"sprite":{"texture":"sprites","size":[0.6,0.6],"uv":[0.25,0,0.25,1],"tint":[1,0.9,0.2,1]},"collider":{"half_extent":[0.3,0.3],"group":"bullet","body":"kinematic"}},
+    {"id":"enemy_slots","count":3,"active_count":3,"placement":{"kind":"grid","origin":[7,-3],"spacing":[0,3],"columns":1},"velocity":{"linear":[-4,0]},"sprite":{"texture":"sprites","size":[1.2,1.2],"uv":[0.5,0,0.25,1],"tint":[1,0.25,0.3,1]},"collider":{"half_extent":[0.6,0.6],"group":"enemy","body":"kinematic"}},
+    {"id":"item_slots","count":2,"active_count":0,"placement":{"kind":"grid","origin":[12,7],"spacing":[0,0],"columns":1},"velocity":{"linear":[-1,0]},"sprite":{"texture":"sprites","size":[0.8,0.8],"uv":[0.75,0,0.25,1],"tint":[0.3,1,0.4,1]},"collider":{"half_extent":[0.4,0.4],"group":"item","body":"kinematic"}}
+  ],
+  "pools":[
+    {"id":"bullets","group":"bullet_slots","on_exhausted":"skip"},
+    {"id":"enemies","group":"enemy_slots","on_exhausted":"recycle_oldest"},
+    {"id":"items","group":"item_slots","on_exhausted":"skip"}
+  ],
+  "systems":[
+    {"id":"bullet_motion","operation":"linear_motion","spawn_group":"bullet_slots"},
+    {"id":"enemy_motion","operation":"linear_motion","spawn_group":"enemy_slots"},
+    {"id":"item_motion","operation":"linear_motion","spawn_group":"item_slots"},
+    {"id":"contacts","operation":"simulate_collisions"}
+  ],
+  "collision_rules":[
+    {"id":"bullet_hits_enemy","a":"bullet","b":"enemy","interaction":"trigger","reactions":[]},
+    {"id":"enemy_hits_base","a":"enemy","b":"base","interaction":"trigger","reactions":[]},
+    {"id":"item_hits_base","a":"item","b":"base","interaction":"trigger","reactions":[]}
+  ],
+  "rules":[
+    {"id":"spawn_enemy","event":{"kind":"fixed_interval","interval_ticks":120},"actions":[{"kind":"spawn_from_pool","pool":"enemies","position":{"kind":"initial"},"velocity":[-4,0],"lifetime_ticks":360}]},
+    {"id":"fire_low","event":{"kind":"action_pressed","action":"fire_low"},"actions":[{"kind":"spawn_from_pool","pool":"bullets","position":{"kind":"constant","value":[-10,-3]},"velocity":[12,0],"lifetime_ticks":180,"result_state":"bullet_spawned"}]},
+    {"id":"fire_mid","event":{"kind":"action_pressed","action":"fire_mid"},"actions":[{"kind":"spawn_from_pool","pool":"bullets","position":{"kind":"constant","value":[-10,0]},"velocity":[12,0],"lifetime_ticks":180,"result_state":"bullet_spawned"}]},
+    {"id":"fire_high","event":{"kind":"action_pressed","action":"fire_high"},"actions":[{"kind":"spawn_from_pool","pool":"bullets","position":{"kind":"constant","value":[-10,3]},"velocity":[12,0],"lifetime_ticks":180,"result_state":"bullet_spawned"}]},
+    {"id":"score_hit","event":{"kind":"contact_begin","rule":"bullet_hits_enemy"},"actions":[{"kind":"release_to_pool","pool":"bullets","target":{"kind":"collision_a"}},{"kind":"release_to_pool","pool":"enemies","target":{"kind":"collision_b"}},{"kind":"add_int_state","state":"score","value":1},{"kind":"spawn_from_pool","pool":"items","position":{"kind":"target","target":{"kind":"collision_b"}},"velocity":[-1,0],"lifetime_ticks":120,"result_state":"item_spawned"}]},
+    {"id":"damage_base","event":{"kind":"contact_begin","rule":"enemy_hits_base"},"actions":[{"kind":"release_to_pool","pool":"enemies","target":{"kind":"collision_a"}},{"kind":"add_int_state","state":"health","value":-1}]},
+    {"id":"collect_item","event":{"kind":"contact_begin","rule":"item_hits_base"},"actions":[{"kind":"release_to_pool","pool":"items","target":{"kind":"collision_a"}}]}
+  ],
+  "ui":[{"id":"hud","kind":"text","position":[480,35],"size":[800,50],"text":"POOL SIEGE  SCORE: {score}  HEALTH: {health}","font":"font","color":[1,1,1,1],"layer":1000,"text_scale":2}]
+}

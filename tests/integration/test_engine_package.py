@@ -50,7 +50,7 @@ def main() -> int:
         game_root = root / "game"
         (game_root / "assets").mkdir(parents=True)
         manifest = game_root / "game.json"
-        manifest.write_text('{"schema_version":"0.3"}\n', encoding="utf-8")
+        manifest.write_text('{"schema_version":"0.5"}\n', encoding="utf-8")
         used_asset = game_root / "assets" / "used.png"
         used_asset.write_bytes(png_header(1, 1))
         (game_root / "assets" / "not-referenced.bin").write_bytes(b"secret")
@@ -61,7 +61,7 @@ def main() -> int:
         (bin_dir / "ai2d_player.exe").write_bytes(b"fake-player")
 
         inspection_metrics: dict[str, object] = {
-            "schema_version": "0.3",
+            "schema_version": "0.5",
             "application": "package_test",
             "dependencies": ["game.json", "assets/used.png"],
             "assets": [{"id": "used", "kind": "png", "path": str(used_asset.resolve())}],

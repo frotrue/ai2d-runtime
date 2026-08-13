@@ -1,0 +1,14 @@
+{
+  "schema_version":"1","frames":120,"events":[],
+  "assertions":[
+    {"tick":0,"kind":"current_scene","scene":"course"},
+    {"tick":0,"kind":"position","scene":"course","group":"runner","index":0,"expected":[-5.9,0],"tolerance":0.0001},
+    {"tick":1,"kind":"position","scene":"course","group":"runner","index":0,"expected":[-5.8,0],"tolerance":0.0001},
+    {"tick":55,"kind":"int_state","state":"begins","op":"eq","value":1},
+    {"tick":80,"kind":"int_state","state":"begins","op":"eq","value":1},
+    {"tick":105,"kind":"int_state","state":"ends","op":"eq","value":1},
+    {"tick":119,"kind":"runtime_metric","metric":"contact_begins","op":"eq","value":1},
+    {"tick":119,"kind":"runtime_metric","metric":"contact_ends","op":"eq","value":1},
+    {"tick":119,"kind":"runtime_metric","metric":"linear_motion_updates","op":"eq","value":240}
+  ]
+}

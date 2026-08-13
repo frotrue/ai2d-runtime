@@ -1,0 +1,30 @@
+{
+  "schema_version": "1",
+  "events": [
+    {
+      "tick": 5,
+      "action": "move_right",
+      "kind": "press"
+    },
+    {
+      "tick": 11,
+      "action": "move_right",
+      "kind": "release"
+    },
+    {
+      "tick": 11,
+      "action": "move_left",
+      "kind": "press"
+    },
+    {
+      "tick": 17,
+      "action": "move_left",
+      "kind": "release"
+    },
+    {
+      "tick": 30,
+      "action": "restart",
+      "kind": "tap"
+    }
+  ]
+}

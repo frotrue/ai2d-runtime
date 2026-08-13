@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate project-owned procedural v0.3 sample sprites and a 5x7 ASCII font."""
+"""Generate project-owned procedural 2D sample sprites and a 5x7 ASCII font."""
 
 from __future__ import annotations
 
@@ -10,7 +10,14 @@ import zlib
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SAMPLES = ("snake", "grid_collector")
+SAMPLES = (
+    "snake",
+    "grid_collector",
+    "projectile_arena",
+    "timed_pickups",
+    "pool_siege",
+    "contact_course",
+)
 
 
 FONT: dict[str, tuple[str, ...]] = {
@@ -128,7 +135,7 @@ def main() -> None:
         directory.mkdir(parents=True, exist_ok=True)
         make_sprites(directory)
         make_font(directory)
-    print("generated v0.3 procedural sample assets")
+    print("generated procedural sample assets")
 
 
 if __name__ == "__main__":

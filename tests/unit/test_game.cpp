@@ -34,6 +34,22 @@ std::filesystem::path grid_collector_manifest() {
     return std::filesystem::path{AI2D_SOURCE_DIR} / "samples" / "grid_collector" / "game.json";
 }
 
+std::filesystem::path projectile_arena_manifest() {
+    return std::filesystem::path{AI2D_SOURCE_DIR} / "samples" / "projectile_arena" / "game.json";
+}
+
+std::filesystem::path timed_pickups_manifest() {
+    return std::filesystem::path{AI2D_SOURCE_DIR} / "samples" / "timed_pickups" / "game.json";
+}
+
+std::filesystem::path pool_siege_manifest() {
+    return std::filesystem::path{AI2D_SOURCE_DIR} / "samples" / "pool_siege" / "game.json";
+}
+
+std::filesystem::path contact_course_manifest() {
+    return std::filesystem::path{AI2D_SOURCE_DIR} / "samples" / "contact_course" / "game.json";
+}
+
 ai2d::InputSnapshot pressed(const ai2d::InputKey key) {
     ai2d::InputSnapshot input{};
     input.keys[static_cast<std::uint8_t>(key)] = true;
@@ -106,7 +122,416 @@ TEST_CASE("GameManifest 0.3 compiles typed grids systems and ordered rules") {
     CHECK(std::any_of(gameplay->systems.begin(), gameplay->systems.end(), [](const ai2d::GameSystemPlan& system) {
         return system.operation == ai2d::GameOperationId::grid_motion;
     }));
+    CHECK(plan->source_hash == 17470168603721065075ULL);
+    CHECK(plan->plan_hash == 8662144749949340176ULL);
     CHECK(ai2d::validate_game_plan(*plan));
+
+    const auto collector = ai2d::compile_game_file(grid_collector_manifest());
+    REQUIRE(collector);
+    CHECK(collector->source_hash == 2351439514531659049ULL);
+    CHECK(collector->plan_hash == 8174193443164806110ULL);
+    CHECK(ai2d::validate_game_plan(*collector));
+}
+
+TEST_CASE("GameManifest 0.4 compiles bounded pools and numeric pool actions") {
+    const auto arena = ai2d::compile_game_file(projectile_arena_manifest());
+    REQUIRE(arena);
+    CHECK(arena->schema_version == ai2d::GameSchemaVersion::v0_4);
+    CHECK(arena->schema_version_text() == "0.4");
+    REQUIRE(arena->scenes[arena->start_scene].pools.size() == 1U);
+    const auto& pool = arena->scenes[arena->start_scene].pools.front();
+    CHECK(arena->symbol(pool.symbol) == "projectiles");
+    CHECK(pool.spawn_group_index == 1U);
+    CHECK(pool.on_exhausted == ai2d::GamePoolExhaustionPolicy::recycle_oldest);
+    CHECK(ai2d::validate_game_plan(*arena));
+
+    const auto pickups = ai2d::compile_game_file(timed_pickups_manifest());
+    REQUIRE(pickups);
+    REQUIRE(pickups->scenes[pickups->start_scene].pools.size() == 1U);
+    CHECK(pickups->scenes[pickups->start_scene].pools.front().on_exhausted ==
+          ai2d::GamePoolExhaustionPolicy::skip);
+    CHECK(ai2d::validate_game_plan(*pickups));
+
+    auto changed_policy = *arena;
+    changed_policy.scenes[changed_policy.start_scene].pools.front().on_exhausted =
+        ai2d::GamePoolExhaustionPolicy::skip;
+    CHECK(ai2d::compute_game_plan_hash(changed_policy) != arena->plan_hash);
+}
+
+TEST_CASE("GameManifest 0.5 compiles bounded motion and typed trigger contacts") {
+    const auto siege = ai2d::compile_game_file(pool_siege_manifest());
+    REQUIRE(siege);
+    CHECK(siege->schema_version == ai2d::GameSchemaVersion::v0_5);
+    CHECK(siege->schema_version_text() == "0.5");
+    REQUIRE(siege->scenes[siege->start_scene].collision_rules.size() == 3U);
+    CHECK(std::all_of(
+        siege->scenes[siege->start_scene].collision_rules.begin(),
+        siege->scenes[siege->start_scene].collision_rules.end(),
+        [](const ai2d::GameCollisionRulePlan& rule) {
+            return rule.interaction == ai2d::GameCollisionInteraction::trigger && rule.reactions.empty();
+        }));
+    CHECK(std::count_if(
+              siege->scenes[siege->start_scene].systems.begin(),
+              siege->scenes[siege->start_scene].systems.end(),
+              [](const ai2d::GameSystemPlan& system) {
+                  return system.operation == ai2d::GameOperationId::linear_motion;
+              }) == 3);
+    CHECK(std::any_of(
+        siege->scenes[siege->start_scene].rules.begin(),
+        siege->scenes[siege->start_scene].rules.end(),
+        [](const ai2d::GameRulePlan& rule) {
+            return rule.event.kind == ai2d::GameRuleEventKind::contact_begin;
+        }));
+    CHECK(ai2d::validate_game_plan(*siege));
+
+    const auto course = ai2d::compile_game_file(contact_course_manifest());
+    REQUIRE(course);
+    CHECK(course->scenes.front().max_contact_pairs == 8U);
+    CHECK(std::any_of(course->scenes.front().rules.begin(), course->scenes.front().rules.end(),
+                      [](const ai2d::GameRulePlan& rule) {
+                          return rule.event.kind == ai2d::GameRuleEventKind::contact_end;
+                      }));
+    CHECK(ai2d::validate_game_plan(*course));
+}
+
+TEST_CASE("SceneSpec 0.5 accepts a reflected one-dynamic solid rule") {
+    std::error_code error{};
+    const auto solid = copy_game_fixture(pool_siege_manifest(), "ai2d-v05-valid-solid");
+    const auto scene = solid / "scenes" / "play.json";
+    replace_text_in_file(
+        scene, R"("group":"bullet","body":"kinematic")",
+        R"("group":"bullet","body":"dynamic")");
+    replace_text_in_file(
+        scene, R"({"id":"bullet_motion","operation":"linear_motion","spawn_group":"bullet_slots"},)", "");
+    replace_text_in_file(
+        scene,
+        R"({"id":"bullet_hits_enemy","a":"bullet","b":"enemy","interaction":"trigger","reactions":[]})",
+        R"({"id":"bullet_hits_enemy","a":"bullet","b":"enemy","interaction":"solid","reactions":[{"kind":"reflect","target":"a"}]})");
+    replace_text_in_file(
+        scene, R"("event":{"kind":"contact_begin","rule":"bullet_hits_enemy"})",
+        R"("event":{"kind":"collision","rule":"bullet_hits_enemy"})");
+    const auto compiled = ai2d::compile_game_file(solid / "game.json");
+    REQUIRE(compiled);
+    CHECK(compiled->scenes[compiled->start_scene].collision_rules.front().interaction ==
+          ai2d::GameCollisionInteraction::solid);
+    CHECK(ai2d::validate_game_plan(*compiled));
+    std::filesystem::remove_all(solid, error);
+    CHECK_FALSE(error);
+}
+
+TEST_CASE("SceneSpec 0.5 rejects invalid interactions capacities and motion ownership") {
+    std::error_code error{};
+
+    const auto mixed_version = copy_game_fixture(pool_siege_manifest(), "ai2d-v05-mixed-version");
+    replace_text_in_file(
+        mixed_version / "scenes" / "play.json", R"("schema_version":"0.5")",
+        R"("schema_version":"0.4")");
+    const auto mixed_result = ai2d::compile_game_file(mixed_version / "game.json");
+    REQUIRE_FALSE(mixed_result);
+    CHECK(mixed_result.error().code == ai2d::DiagnosticCode::game_scene_invalid);
+    std::filesystem::remove_all(mixed_version, error);
+    CHECK_FALSE(error);
+
+    const auto missing_interaction = copy_game_fixture(pool_siege_manifest(), "ai2d-v05-missing-interaction");
+    replace_text_in_file(
+        missing_interaction / "scenes" / "play.json", R"(,"interaction":"trigger")", "");
+    const auto missing_result = ai2d::compile_game_file(missing_interaction / "game.json");
+    REQUIRE_FALSE(missing_result);
+    CHECK(missing_result.error().code == ai2d::DiagnosticCode::game_collision_interaction_invalid);
+    std::filesystem::remove_all(missing_interaction, error);
+    CHECK_FALSE(error);
+
+    const auto trigger_reaction = copy_game_fixture(pool_siege_manifest(), "ai2d-v05-trigger-reaction");
+    replace_text_in_file(
+        trigger_reaction / "scenes" / "play.json", R"("interaction":"trigger","reactions":[])"
+        , R"("interaction":"trigger","reactions":[{"kind":"add_int_state","state":"score","value":1}])");
+    const auto reaction_result = ai2d::compile_game_file(trigger_reaction / "game.json");
+    REQUIRE_FALSE(reaction_result);
+    CHECK(reaction_result.error().code == ai2d::DiagnosticCode::game_collision_interaction_invalid);
+    std::filesystem::remove_all(trigger_reaction, error);
+    CHECK_FALSE(error);
+
+    const auto trigger_collision_event = copy_game_fixture(pool_siege_manifest(), "ai2d-v05-trigger-collision-event");
+    replace_text_in_file(
+        trigger_collision_event / "scenes" / "play.json",
+        R"("event":{"kind":"contact_begin","rule":"bullet_hits_enemy"})",
+        R"("event":{"kind":"collision","rule":"bullet_hits_enemy"})");
+    const auto event_result = ai2d::compile_game_file(trigger_collision_event / "game.json");
+    REQUIRE_FALSE(event_result);
+    CHECK(event_result.error().code == ai2d::DiagnosticCode::game_collision_interaction_invalid);
+    std::filesystem::remove_all(trigger_collision_event, error);
+    CHECK_FALSE(error);
+
+    const auto missing_capacity = copy_game_fixture(pool_siege_manifest(), "ai2d-v05-missing-contact-capacity");
+    replace_text_in_file(
+        missing_capacity / "scenes" / "play.json", R"(,"max_contact_pairs":32)", "");
+    const auto capacity_result = ai2d::compile_game_file(missing_capacity / "game.json");
+    REQUIRE_FALSE(capacity_result);
+    CHECK(capacity_result.error().code == ai2d::DiagnosticCode::game_collision_interaction_invalid);
+    std::filesystem::remove_all(missing_capacity, error);
+    CHECK_FALSE(error);
+
+    const auto oversized_capacity = copy_game_fixture(pool_siege_manifest(), "ai2d-v05-oversized-contact-capacity");
+    replace_text_in_file(
+        oversized_capacity / "scenes" / "play.json", R"("max_contact_pairs":32)",
+        R"("max_contact_pairs":129)");
+    const auto oversized_result = ai2d::compile_game_file(oversized_capacity / "game.json");
+    REQUIRE_FALSE(oversized_result);
+    CHECK(oversized_result.error().code == ai2d::DiagnosticCode::game_collision_interaction_invalid);
+    std::filesystem::remove_all(oversized_capacity, error);
+    CHECK_FALSE(error);
+
+    const auto legacy_trigger = copy_game_fixture(pool_siege_manifest(), "ai2d-v05-collider-trigger");
+    replace_text_in_file(
+        legacy_trigger / "scenes" / "play.json", R"("body":"kinematic"})",
+        R"("body":"kinematic","trigger":true})");
+    const auto legacy_result = ai2d::compile_game_file(legacy_trigger / "game.json");
+    REQUIRE_FALSE(legacy_result);
+    CHECK(legacy_result.error().code == ai2d::DiagnosticCode::game_collision_interaction_invalid);
+    std::filesystem::remove_all(legacy_trigger, error);
+    CHECK_FALSE(error);
+
+    const auto dynamic_linear = copy_game_fixture(pool_siege_manifest(), "ai2d-v05-dynamic-linear");
+    replace_text_in_file(
+        dynamic_linear / "scenes" / "play.json", R"("group":"bullet","body":"kinematic")",
+        R"("group":"bullet","body":"dynamic")");
+    const auto dynamic_result = ai2d::compile_game_file(dynamic_linear / "game.json");
+    REQUIRE_FALSE(dynamic_result);
+    CHECK(dynamic_result.error().code == ai2d::DiagnosticCode::game_scene_invalid);
+    std::filesystem::remove_all(dynamic_linear, error);
+    CHECK_FALSE(error);
+
+    const auto duplicate_motion = copy_game_fixture(pool_siege_manifest(), "ai2d-v05-duplicate-linear");
+    replace_text_in_file(
+        duplicate_motion / "scenes" / "play.json",
+        R"({"id":"bullet_motion","operation":"linear_motion","spawn_group":"bullet_slots"})",
+        R"({"id":"bullet_motion","operation":"linear_motion","spawn_group":"bullet_slots"},{"id":"bullet_motion_2","operation":"linear_motion","spawn_group":"bullet_slots"})");
+    const auto duplicate_result = ai2d::compile_game_file(duplicate_motion / "game.json");
+    REQUIRE_FALSE(duplicate_result);
+    CHECK(duplicate_result.error().code == ai2d::DiagnosticCode::game_scene_invalid);
+    std::filesystem::remove_all(duplicate_motion, error);
+    CHECK_FALSE(error);
+}
+
+TEST_CASE("GamePlan 0.5 public validation mirrors contact and motion invariants") {
+    const auto compiled = ai2d::compile_game_file(pool_siege_manifest());
+    REQUIRE(compiled);
+
+    auto missing_contact_capacity = *compiled;
+    missing_contact_capacity.scenes[missing_contact_capacity.start_scene].max_contact_pairs = 0U;
+    missing_contact_capacity.plan_hash = ai2d::compute_game_plan_hash(missing_contact_capacity);
+    const auto capacity_result = ai2d::validate_game_plan(missing_contact_capacity);
+    REQUIRE_FALSE(capacity_result);
+    CHECK(capacity_result.error().code == ai2d::DiagnosticCode::game_collision_interaction_invalid);
+
+    auto trigger_reaction = *compiled;
+    auto& collision_rule = trigger_reaction.scenes[trigger_reaction.start_scene].collision_rules.front();
+    collision_rule.reactions.push_back({});
+    trigger_reaction.plan_hash = ai2d::compute_game_plan_hash(trigger_reaction);
+    const auto trigger_result = ai2d::validate_game_plan(trigger_reaction);
+    REQUIRE_FALSE(trigger_result);
+    CHECK(trigger_result.error().code == ai2d::DiagnosticCode::game_collision_interaction_invalid);
+
+    auto duplicate_linear = *compiled;
+    auto linear = duplicate_linear.scenes[duplicate_linear.start_scene].systems.front();
+    linear.symbol = static_cast<ai2d::SymbolId>(duplicate_linear.symbols.size());
+    duplicate_linear.symbols.emplace_back("duplicate_linear");
+    duplicate_linear.scenes[duplicate_linear.start_scene].systems.insert(
+        duplicate_linear.scenes[duplicate_linear.start_scene].systems.begin() + 1, linear);
+    duplicate_linear.plan_hash = ai2d::compute_game_plan_hash(duplicate_linear);
+    CHECK_FALSE(ai2d::validate_game_plan(duplicate_linear));
+
+    auto aggregate_overflow = *compiled;
+    const auto scene_template = aggregate_overflow.scenes[aggregate_overflow.start_scene];
+    aggregate_overflow.scenes.clear();
+    aggregate_overflow.transitions.clear();
+    for (std::uint32_t index = 0U; index < 11U; ++index) {
+        auto scene = scene_template;
+        scene.symbol = static_cast<ai2d::SymbolId>(aggregate_overflow.symbols.size());
+        aggregate_overflow.symbols.emplace_back("contact_scene_" + std::to_string(index));
+        scene.max_candidate_pairs = 100'000U;
+        scene.max_contact_pairs = 100'000U;
+        aggregate_overflow.scenes.push_back(std::move(scene));
+    }
+    aggregate_overflow.start_scene = 0U;
+    aggregate_overflow.plan_hash = ai2d::compute_game_plan_hash(aggregate_overflow);
+    const auto aggregate_result = ai2d::validate_game_plan(aggregate_overflow);
+    REQUIRE_FALSE(aggregate_result);
+    CHECK(aggregate_result.error().code == ai2d::DiagnosticCode::game_collision_interaction_invalid);
+}
+
+TEST_CASE("game-test-v1 compiles assertions to numeric observations and rejects ambiguity") {
+    std::error_code error{};
+    const auto game = ai2d::compile_game_file(contact_course_manifest());
+    REQUIRE(game);
+    const auto script = contact_course_manifest().parent_path() / "tests" / "contact-lifecycle.json";
+    const auto compiled = ai2d::compile_game_test_file(script, *game);
+    REQUIRE(compiled);
+    CHECK(compiled->frames == 120U);
+    CHECK(compiled->events.empty());
+    REQUIRE(compiled->assertions.size() == 9U);
+    CHECK(compiled->assertions[1].kind == ai2d::GameTestAssertionKind::position);
+    CHECK(compiled->assertions[1].scene_index == game->start_scene);
+    CHECK(compiled->assertions[1].spawn_group_index == 0U);
+    CHECK(compiled->assertions[1].item_index == 0U);
+    CHECK(compiled->assertions.back().metric == ai2d::GameTestMetric::linear_motion_updates);
+
+    const auto root = copy_game_fixture(contact_course_manifest(), "ai2d-v05-invalid-game-test");
+    const auto invalid_script = root / "tests" / "contact-lifecycle.json";
+    replace_text_in_file(invalid_script, R"("tick":55)", R"("tick":0)");
+    const auto unordered = ai2d::compile_game_test_file(invalid_script, *game);
+    REQUIRE_FALSE(unordered);
+    CHECK(unordered.error().code == ai2d::DiagnosticCode::input_invalid);
+    std::filesystem::remove_all(root, error);
+    CHECK_FALSE(error);
+
+    const auto sibling_root = copy_game_fixture(contact_course_manifest(), "ai2d-v05-game-test-sibling");
+    const auto sibling_script = sibling_root / "tests" / "contact-lifecycle.json";
+    replace_text_in_file(
+        sibling_script, R"("kind":"current_scene","scene":"course")",
+        R"("kind":"current_scene","scene":"course","state":"begins")");
+    CHECK_FALSE(ai2d::compile_game_test_file(sibling_script, *game));
+    std::filesystem::remove_all(sibling_root, error);
+    CHECK_FALSE(error);
+
+    const auto siege = ai2d::compile_game_file(pool_siege_manifest());
+    REQUIRE(siege);
+    const auto invalid_velocity = std::filesystem::temp_directory_path() / "ai2d-v05-invalid-velocity-test.json";
+    {
+        std::ofstream output{invalid_velocity, std::ios::binary | std::ios::trunc};
+        REQUIRE(output);
+        output << R"({"schema_version":"1","frames":1,"events":[],"assertions":[{"tick":0,"kind":"velocity","scene":"play","group":"base","index":0,"expected":[0,0]}]})";
+    }
+    const auto velocity_result = ai2d::compile_game_test_file(invalid_velocity, *siege);
+    REQUIRE_FALSE(velocity_result);
+    CHECK(velocity_result.error().code == ai2d::DiagnosticCode::input_invalid);
+    std::filesystem::remove(invalid_velocity, error);
+    CHECK_FALSE(error);
+}
+
+TEST_CASE("SceneSpec 0.4 rejects mixed versions ownership conflicts and invalid pool targets") {
+    std::error_code error{};
+
+    const auto mixed = copy_game_fixture(projectile_arena_manifest(), "ai2d-v04-mixed-version");
+    replace_text_in_file(mixed / "scenes" / "game.json", R"("schema_version":"0.4")", R"("schema_version":"0.3")");
+    CHECK_FALSE(ai2d::compile_game_file(mixed / "game.json"));
+    std::filesystem::remove_all(mixed, error);
+    CHECK_FALSE(error);
+
+    const auto duplicate = copy_game_fixture(projectile_arena_manifest(), "ai2d-v04-duplicate-pool-owner");
+    replace_text_in_file(
+        duplicate / "scenes" / "game.json",
+        R"("pools":[{"id":"projectiles","group":"projectile_slots","on_exhausted":"recycle_oldest"}])",
+        R"("pools":[{"id":"projectiles","group":"projectile_slots","on_exhausted":"recycle_oldest"},{"id":"duplicate","group":"projectile_slots","on_exhausted":"skip"}])");
+    const auto duplicate_result = ai2d::compile_game_file(duplicate / "game.json");
+    REQUIRE_FALSE(duplicate_result);
+    CHECK(duplicate_result.error().code == ai2d::DiagnosticCode::game_pool_invalid);
+    std::filesystem::remove_all(duplicate, error);
+    CHECK_FALSE(error);
+
+    const auto direct = copy_game_fixture(projectile_arena_manifest(), "ai2d-v04-direct-active-owner");
+    replace_text_in_file(
+        direct / "scenes" / "game.json",
+        R"({"kind":"spawn_from_pool","pool":"projectiles","position":{"kind":"target","target":{"kind":"index","group":"muzzle","index":0}},"velocity":[18,0],"lifetime_ticks":180,"result_state":"spawn_succeeded"})",
+        R"({"kind":"activate","target":{"kind":"group","group":"projectile_slots"}})");
+    const auto direct_result = ai2d::compile_game_file(direct / "game.json");
+    REQUIRE_FALSE(direct_result);
+    CHECK(direct_result.error().code == ai2d::DiagnosticCode::game_pool_invalid);
+    std::filesystem::remove_all(direct, error);
+    CHECK_FALSE(error);
+
+    const auto wrong_release = copy_game_fixture(projectile_arena_manifest(), "ai2d-v04-wrong-release-target");
+    replace_text_in_file(
+        wrong_release / "scenes" / "game.json",
+        R"({"kind":"release_to_pool","pool":"projectiles","target":{"kind":"collision_a"},"result_state":"release_succeeded"})",
+        R"({"kind":"release_to_pool","pool":"projectiles","target":{"kind":"collision_b"},"result_state":"release_succeeded"})");
+    const auto wrong_result = ai2d::compile_game_file(wrong_release / "game.json");
+    REQUIRE_FALSE(wrong_result);
+    CHECK(wrong_result.error().code == ai2d::DiagnosticCode::game_pool_invalid);
+    std::filesystem::remove_all(wrong_release, error);
+    CHECK_FALSE(error);
+
+    const auto missing_velocity = copy_game_fixture(projectile_arena_manifest(), "ai2d-v04-missing-pool-velocity");
+    replace_text_in_file(
+        missing_velocity / "scenes" / "game.json",
+        R"("velocity":{"linear":[0,0]},"sprite")",
+        R"("sprite")");
+    const auto missing_velocity_result = ai2d::compile_game_file(missing_velocity / "game.json");
+    REQUIRE_FALSE(missing_velocity_result);
+    CHECK(missing_velocity_result.error().code == ai2d::DiagnosticCode::game_pool_invalid);
+    std::filesystem::remove_all(missing_velocity, error);
+    CHECK_FALSE(error);
+
+    const auto invalid_lifetime = copy_game_fixture(projectile_arena_manifest(), "ai2d-v04-invalid-lifetime");
+    replace_text_in_file(
+        invalid_lifetime / "scenes" / "game.json", R"("lifetime_ticks":180)", R"("lifetime_ticks":0)");
+    const auto invalid_lifetime_result = ai2d::compile_game_file(invalid_lifetime / "game.json");
+    REQUIRE_FALSE(invalid_lifetime_result);
+    CHECK(invalid_lifetime_result.error().code == ai2d::DiagnosticCode::game_pool_invalid);
+    std::filesystem::remove_all(invalid_lifetime, error);
+    CHECK_FALSE(error);
+
+    const auto invalid_context = copy_game_fixture(projectile_arena_manifest(), "ai2d-v04-invalid-pool-context");
+    replace_text_in_file(
+        invalid_context / "scenes" / "game.json",
+        R"("position":{"kind":"target","target":{"kind":"index","group":"muzzle","index":0}})",
+        R"("position":{"kind":"target","target":{"kind":"collision_a"}})");
+    const auto invalid_context_result = ai2d::compile_game_file(invalid_context / "game.json");
+    REQUIRE_FALSE(invalid_context_result);
+    CHECK(invalid_context_result.error().code == ai2d::DiagnosticCode::game_pool_invalid);
+    std::filesystem::remove_all(invalid_context, error);
+    CHECK_FALSE(error);
+
+    const auto legacy_deactivate = copy_game_fixture(projectile_arena_manifest(), "ai2d-v04-legacy-pool-deactivate");
+    replace_text_in_file(
+        legacy_deactivate / "scenes" / "game.json",
+        R"({"id":"projectile_boundary","a":"projectile","b":"boundary","reactions":[]})",
+        R"({"id":"projectile_boundary","a":"projectile","b":"boundary","reactions":[{"kind":"deactivate","target":"a"}]})");
+    const auto legacy_deactivate_result = ai2d::compile_game_file(legacy_deactivate / "game.json");
+    REQUIRE_FALSE(legacy_deactivate_result);
+    CHECK(legacy_deactivate_result.error().code == ai2d::DiagnosticCode::game_pool_invalid);
+    std::filesystem::remove_all(legacy_deactivate, error);
+    CHECK_FALSE(error);
+}
+
+TEST_CASE("GamePlan 0.4 public validation preserves exclusive pool lifecycle ownership") {
+    const auto compiled = ai2d::compile_game_file(projectile_arena_manifest());
+    REQUIRE(compiled);
+    auto direct = *compiled;
+    auto& gameplay = direct.scenes[direct.start_scene];
+    REQUIRE_FALSE(gameplay.rules.empty());
+    REQUIRE_FALSE(gameplay.rules.front().actions.empty());
+    auto& action = gameplay.rules.front().actions.front();
+    action.kind = ai2d::GameRuleActionKind::activate;
+    action.target.kind = ai2d::GameRuleTargetKind::spawn_group;
+    action.target.spawn_group_index = gameplay.pools.front().spawn_group_index;
+    direct.plan_hash = ai2d::compute_game_plan_hash(direct);
+    const auto direct_result = ai2d::validate_game_plan(direct);
+    REQUIRE_FALSE(direct_result);
+    CHECK(direct_result.error().code == ai2d::DiagnosticCode::game_pool_invalid);
+
+    auto invalid_context = *compiled;
+    auto& context_action = invalid_context.scenes[invalid_context.start_scene].rules.front().actions.front();
+    context_action.kind = ai2d::GameRuleActionKind::release_to_pool;
+    context_action.pool_index = 0U;
+    context_action.target.kind = ai2d::GameRuleTargetKind::collision_a;
+    invalid_context.plan_hash = ai2d::compute_game_plan_hash(invalid_context);
+    const auto context_result = ai2d::validate_game_plan(invalid_context);
+    REQUIRE_FALSE(context_result);
+    CHECK(context_result.error().code == ai2d::DiagnosticCode::game_pool_invalid);
+
+    const auto snake = ai2d::compile_game_file(snake_manifest());
+    REQUIRE(snake);
+    auto chained = *snake;
+    chained.schema_version = ai2d::GameSchemaVersion::v0_4;
+    auto& snake_scene = chained.scenes[chained.start_scene];
+    const auto pool_symbol = static_cast<ai2d::SymbolId>(chained.symbols.size());
+    chained.symbols.emplace_back("invalid_chain_pool");
+    snake_scene.pools.push_back({pool_symbol, 1U, ai2d::GamePoolExhaustionPolicy::skip});
+    chained.plan_hash = ai2d::compute_game_plan_hash(chained);
+    const auto chained_result = ai2d::validate_game_plan(chained);
+    REQUIRE_FALSE(chained_result);
+    CHECK(chained_result.error().code == ai2d::DiagnosticCode::game_pool_invalid);
 }
 
 TEST_CASE("SceneSpec 0.3 parsers reject sibling variant fields and missing required fields") {

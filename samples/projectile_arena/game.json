@@ -1,0 +1,14 @@
+{
+  "schema_version":"0.4","seed":404,"name":"Projectile Arena","organization":"ai2d","application":"projectile_arena",
+  "window":{"title":"Projectile Arena","width":960,"height":540,"virtual_width":960,"virtual_height":540,"default_fps":"60"},
+  "assets":[{"id":"sprites","kind":"png","path":"assets/sprites.png"},{"id":"font","kind":"font","path":"assets/font.png","metadata":"assets/font.json"}],
+  "actions":[{"id":"fire","keys":["space"]},{"id":"fire_high","keys":["up"]},{"id":"restart","keys":["enter"]},{"id":"quit","keys":["escape"]}],
+  "states":[{"id":"score","initial":0,"min":0,"max":9999},{"id":"spawn_succeeded","initial":0,"min":0,"max":1},{"id":"release_succeeded","initial":0,"min":0,"max":1}],
+  "scenes":[{"id":"game","path":"scenes/game.json"},{"id":"over","path":"scenes/over.json"}],
+  "start_scene":"game",
+  "transitions":[
+    {"from":"game","condition":{"kind":"int_state_at_least","state":"score","value":5},"to":"over","reset_scene":true},
+    {"from":"game","condition":{"kind":"action_pressed","action":"quit"},"to":"$quit"},
+    {"from":"over","condition":{"kind":"action_pressed","action":"restart"},"to":"game","reset_scene":true,"reset_session":true}
+  ]
+}

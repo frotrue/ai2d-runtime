@@ -1,0 +1,79 @@
+{
+  "schema_version": "0.4",
+  "id": "game_over",
+  "world": {
+    "capacity": 1
+  },
+  "camera": {
+    "position": [0, 0],
+    "half_extent": [8, 4.5]
+  },
+  "grids": [],
+  "spawn_groups": [
+    {
+      "id": "game_over_marker",
+      "count": 1,
+      "active_count": 1,
+      "placement": {
+        "kind": "grid",
+        "origin": [0, 0],
+        "spacing": [0, 0],
+        "columns": 1
+      },
+      "sprite": {
+        "texture": "pixel",
+        "size": [5, 2],
+        "tint": [0.75, 0.08, 0.12, 1],
+        "layer": 1
+      }
+    }
+  ],
+  "pools": [],
+  "systems": [],
+  "rules": [],
+  "ui": [
+    {
+      "id": "game_over_panel",
+      "kind": "panel",
+      "position": [480, 270],
+      "size": [620, 300],
+      "color": [0.08, 0.01, 0.02, 0.96],
+      "layer": 10
+    },
+    {
+      "id": "restart_button",
+      "kind": "button",
+      "position": [480, 370],
+      "size": [380, 70],
+      "text": "ENTER TO RESTART",
+      "font": "hud_font",
+      "action": "restart",
+      "color": [0.1, 0.45, 0.6, 1],
+      "hover_color": [0.15, 0.65, 0.85, 1],
+      "text_color": [1, 1, 1, 1],
+      "layer": 11
+    },
+    {
+      "id": "game_over_text",
+      "kind": "text",
+      "position": [480, 220],
+      "size": [430, 70],
+      "text": "GAME OVER",
+      "font": "hud_font",
+      "text_color": [1, 0.25, 0.3, 1],
+      "layer": 12,
+      "text_scale": 8
+    },
+    {
+      "id": "final_score",
+      "kind": "text",
+      "position": [480, 290],
+      "size": [360, 40],
+      "text": "SCORE {score}",
+      "font": "hud_font",
+      "text_color": [1, 0.9, 0.25, 1],
+      "layer": 12,
+      "text_scale": 5
+    }
+  ]
+}

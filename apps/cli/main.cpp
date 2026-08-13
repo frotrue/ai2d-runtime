@@ -708,7 +708,7 @@ int main(const int argument_count, const char* const* const arguments) {
         std::cout
             << "usage: ai2d_cli <command> [options]\n"
             << "commands:\n"
-            << "  game       validate, inspect, or run GameManifest content\n"
+            << "  game       validate, inspect, run, or verify GameManifest content\n"
             << "  validate   validate a ScenarioSpec\n"
             << "  inspect    inspect plans, schemas, or Vulkan capabilities\n"
             << "  run        run a ScenarioSpec\n"
