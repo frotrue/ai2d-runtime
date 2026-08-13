@@ -82,6 +82,43 @@ def main() -> int:
     assert course_metrics["contact_ends"] == 1
     assert course_metrics["linear_motion_updates"] == 240
 
+    pulse = arguments.root / "samples" / "blackbox_core_game"
+    pulse_metrics = verify(
+        arguments.binary,
+        pulse / "game.json",
+        pulse / "tests" / "core-win.json",
+    )
+    assert pulse_metrics["scene"] == "victory"
+    assert pulse_metrics["states"]["score"] == 3
+    assert pulse_metrics["contact_begins"] == 4
+    assert pulse_metrics["contact_ends"] == 1
+    pulse_assertions = json.loads((pulse / "tests" / "core-win.json").read_text(encoding="utf-8"))[
+        "assertions"
+    ]
+    assertion_results = list(zip(pulse_assertions, pulse_metrics["assertions"], strict=True))
+    metric_results = {
+        expected["metric"]: observed["actual"]
+        for expected, observed in assertion_results
+        if expected["kind"] == "runtime_metric"
+    }
+    assert metric_results["pool_exhaustions"] == 7
+    assert metric_results["pool_recycled_slots"] == 3
+    contact_effect = next(
+        observed
+        for expected, observed in assertion_results
+        if expected["tick"] == 20 and expected["kind"] == "position"
+    )
+    assert abs(contact_effect["actual"][0] - 0.2) <= 0.00001
+    assert abs(contact_effect["actual"][1] - 0.027) <= 0.00001
+
+    pulse_restart = verify(
+        arguments.binary,
+        pulse / "game.json",
+        pulse / "tests" / "defeat-restart.json",
+    )
+    assert pulse_restart["scene"] == "play"
+    assert pulse_restart["states"]["health"] == 4
+
     with tempfile.TemporaryDirectory(prefix="ai2d-v05-assertion-") as temporary:
         failing = Path(temporary) / "failing.json"
         source = json.loads((course / "tests" / "contact-lifecycle.json").read_text(encoding="utf-8"))
@@ -107,6 +144,7 @@ def main() -> int:
         "projectile_arena": (10559158477999424372, 2568389474762519076),
         "timed_pickups": (5690496091730965423, 1461871726252971360),
         "pool_dodger": (7397713390522847020, 13989442041582692557),
+        "blackbox_core_game": (1039433421557313106, 14953015342986406049),
     }
     for sample, expected in fixed_hashes.items():
         inspected = invoke(
@@ -118,7 +156,7 @@ def main() -> int:
         assert (inspected["source_hash"], inspected["plan_hash"]) == expected
 
     if arguments.gpu:
-        for sample in (siege, course):
+        for sample in (siege, course, pulse):
             rendered = invoke(
                 arguments.binary,
                 "game",

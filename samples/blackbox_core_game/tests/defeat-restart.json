@@ -1,0 +1,30 @@
+{
+  "schema_version": "1",
+  "frames": 325,
+  "events": [
+    {"tick": 310, "action": "restart", "kind": "tap"}
+  ],
+  "assertions": [
+    {"tick": 0, "kind": "position", "scene": "play", "group": "probe", "index": 0, "expected": [0, 0.0013333333333333333], "tolerance": 0.00001},
+    {"tick": 1, "kind": "position", "scene": "play", "group": "probe", "index": 0, "expected": [0, 0.0026666666666666666], "tolerance": 0.00001},
+    {"tick": 40, "kind": "int_state", "state": "health", "op": "eq", "value": 3},
+    {"tick": 40, "kind": "int_state", "state": "danger", "op": "eq", "value": 0},
+    {"tick": 40, "kind": "int_state", "state": "clearances", "op": "ge", "value": 1},
+    {"tick": 80, "kind": "velocity", "scene": "play", "group": "hazard", "index": 0, "expected": [-6, 0], "tolerance": 0.00001},
+    {"tick": 300, "kind": "current_scene", "scene": "defeat"},
+    {"tick": 300, "kind": "int_state", "state": "health", "op": "eq", "value": 0},
+    {"tick": 300, "kind": "int_state", "state": "score", "op": "eq", "value": 0},
+    {"tick": 300, "kind": "runtime_metric", "metric": "collision_contacts", "op": "ge", "value": 3},
+    {"tick": 300, "kind": "runtime_metric", "metric": "contact_begins", "op": "ge", "value": 4},
+    {"tick": 300, "kind": "runtime_metric", "metric": "contact_ends", "op": "ge", "value": 3},
+    {"tick": 300, "kind": "runtime_metric", "metric": "motion_segments", "op": "ge", "value": 500},
+    {"tick": 300, "kind": "runtime_metric", "metric": "linear_motion_updates", "op": "ge", "value": 250},
+    {"tick": 310, "kind": "current_scene", "scene": "play"},
+    {"tick": 310, "kind": "int_state", "state": "health", "op": "eq", "value": 4},
+    {"tick": 310, "kind": "int_state", "state": "score", "op": "eq", "value": 0},
+    {"tick": 310, "kind": "int_state", "state": "danger", "op": "eq", "value": 0},
+    {"tick": 310, "kind": "int_state", "state": "clearances", "op": "eq", "value": 0},
+    {"tick": 324, "kind": "current_scene", "scene": "play"},
+    {"tick": 324, "kind": "int_state", "state": "health", "op": "eq", "value": 4}
+  ]
+}

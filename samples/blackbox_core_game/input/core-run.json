@@ -1,0 +1,9 @@
+{
+  "schema_version": "1",
+  "events": [
+    {"tick": 0, "action": "decoy", "kind": "tap"},
+    {"tick": 4, "action": "collect", "kind": "tap"},
+    {"tick": 30, "action": "collect", "kind": "tap"},
+    {"tick": 85, "action": "collect", "kind": "tap"}
+  ]
+}

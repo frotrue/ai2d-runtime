@@ -323,7 +323,8 @@ bool parse_run_arguments(
     }
     return !(output.headless && output.offscreen) &&
            !((output.headless || output.offscreen) && output.frames == 0U) &&
-           (output.input_script.empty() || output.headless || output.offscreen);
+           (output.input_script.empty() || output.frames != 0U) &&
+           (output.input_script.empty() || output.headless || output.offscreen || output.hidden);
 }
 
 int run_game(const int argument_count, const char* const* arguments) {
@@ -334,7 +335,7 @@ int run_game(const int argument_count, const char* const* arguments) {
         return emit_invalid(
             "run",
             requested_json,
-            "usage: ai2d_cli game run <game.json> [--frames N] [--headless|--offscreen] [--input-script FILE] [--fps CAP] [--json]");
+            "usage: ai2d_cli game run <game.json> [--frames N] [--headless|--offscreen|--hidden] [--input-script FILE] [--fps CAP] [--json]");
     }
     auto plan = ai2d::compile_game_file(arguments[3]);
     if (!plan) return emit_failure("run", std::move(plan.error()), run.json);

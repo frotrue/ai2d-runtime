@@ -114,6 +114,36 @@ def main() -> int:
         assert json.loads(interactive_rejected.stdout)["status"] == "fail"
 
     if arguments.gpu:
+        with tempfile.TemporaryDirectory(prefix="ai2d-hidden-script-") as temporary:
+            hidden_input_script = Path(temporary) / "input.json"
+            hidden_input_script.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1",
+                        "events": [{"tick": 0, "action": "start", "kind": "tap"}],
+                    },
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            hidden_scripted = run(
+                arguments.binary,
+                "game",
+                "run",
+                str(manifest),
+                "--hidden",
+                "--frames",
+                "3",
+                "--input-script",
+                str(hidden_input_script),
+                "--no-audio",
+                "--no-saved-settings",
+            )
+            hidden_scripted_metrics = hidden_scripted["metrics"]
+            assert hidden_scripted_metrics["simulation_ticks"] == 3  # type: ignore[index]
+            assert Path(hidden_scripted_metrics["input_script"]) == hidden_input_script  # type: ignore[arg-type,index]
+            assert hidden_scripted_metrics["scene"] == "game"  # type: ignore[index]
+
         offscreen = run(
             arguments.binary,
             "game",

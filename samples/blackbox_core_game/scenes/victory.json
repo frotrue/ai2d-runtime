@@ -1,0 +1,25 @@
+{
+  "schema_version": "0.5",
+  "id": "victory",
+  "world": {"capacity": 1},
+  "camera": {"position": [0, 0], "half_extent": [8, 4.5]},
+  "grids": [],
+  "spawn_groups": [
+    {
+      "id": "victory_backdrop",
+      "count": 1,
+      "placement": {"kind": "grid", "origin": [0, 0], "spacing": [0, 0], "columns": 1},
+      "sprite": {"texture": "sprites", "size": [16, 9], "uv": [0.75, 0, 0.125, 1], "tint": [0.45, 1, 0.7, 1], "layer": -10}
+    }
+  ],
+  "pools": [],
+  "systems": [],
+  "collision_rules": [],
+  "rules": [],
+  "ui": [
+    {"id": "victory_panel", "kind": "panel", "position": [480, 270], "size": [620, 280], "color": [0.02, 0.12, 0.12, 0.92], "layer": 10},
+    {"id": "victory_title", "kind": "text", "position": [480, 205], "size": [520, 70], "text": "SALVAGE COMPLETE", "font": "ui_font", "text_color": [0.65, 1, 0.75, 1], "layer": 11, "text_scale": 4},
+    {"id": "victory_score", "kind": "text", "position": [480, 275], "size": [420, 50], "text": "SCORE {score}  HULL {health}", "font": "ui_font", "text_color": [1, 1, 0.8, 1], "layer": 11, "text_scale": 2},
+    {"id": "victory_restart", "kind": "button", "position": [480, 350], "size": [360, 54], "text": "ENTER TO RESTART", "font": "ui_font", "action": "restart", "color": [0.08, 0.35, 0.3, 1], "hover_color": [0.15, 0.55, 0.45, 1], "text_color": [1, 1, 1, 1], "layer": 11, "text_scale": 2}
+  ]
+}

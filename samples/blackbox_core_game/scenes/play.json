@@ -1,0 +1,192 @@
+{
+  "schema_version": "0.5",
+  "id": "play",
+  "world": {"capacity": 16},
+  "camera": {"position": [0, 0], "half_extent": [8, 4.5]},
+  "collision": {
+    "bounds": [-8, -4.5, 8, 4.5],
+    "cell_size": [1, 1],
+    "max_colliders": 16,
+    "max_grid_references": 512,
+    "max_candidate_pairs": 128,
+    "max_contact_pairs": 32,
+    "max_impacts": 8
+  },
+  "grids": [],
+  "spawn_groups": [
+    {
+      "id": "background",
+      "count": 1,
+      "placement": {"kind": "grid", "origin": [0, 0], "spacing": [0, 0], "columns": 1},
+      "sprite": {"texture": "sprites", "size": [16, 9], "uv": [0, 0, 0.125, 1], "tint": [0.55, 0.65, 1, 1], "layer": -10}
+    },
+    {
+      "id": "walls",
+      "count": 2,
+      "placement": {"kind": "grid", "origin": [-5, 0], "spacing": [10, 0], "columns": 2},
+      "sprite": {"texture": "sprites", "size": [0.4, 7], "uv": [0.375, 0, 0.125, 1], "tint": [0.75, 0.6, 1, 1], "layer": 1},
+      "collider": {"half_extent": [0.2, 3.5], "group": "wall", "body": "static"}
+    },
+    {
+      "id": "probe",
+      "count": 1,
+      "placement": {"kind": "grid", "origin": [0, 0], "spacing": [0, 0], "columns": 1},
+      "velocity": {"linear": [0, 0.08]},
+      "sprite": {"texture": "sprites", "size": [1, 1.2], "uv": [0.125, 0, 0.125, 1], "layer": 4},
+      "collider": {"half_extent": [0.5, 0.6], "group": "probe", "body": "kinematic"}
+    },
+    {
+      "id": "hazard",
+      "count": 1,
+      "placement": {"kind": "grid", "origin": [-3, 0], "spacing": [0, 0], "columns": 1},
+      "velocity": {"linear": [6, 0]},
+      "sprite": {"texture": "sprites", "size": [0.7, 0.7], "uv": [0.25, 0, 0.125, 1], "layer": 5},
+      "collider": {"half_extent": [0.3, 0.3], "group": "hazard", "body": "dynamic"}
+    },
+    {
+      "id": "packet_slots",
+      "count": 1,
+      "active_count": 0,
+      "placement": {"kind": "grid", "origin": [-4, 0], "spacing": [0, 0], "columns": 1},
+      "velocity": {"linear": [0, 0]},
+      "sprite": {"texture": "sprites", "size": [0.55, 0.55], "uv": [0.5, 0, 0.125, 1], "layer": 5},
+      "collider": {"half_extent": [0.25, 0.25], "group": "packet", "body": "kinematic"}
+    },
+    {
+      "id": "effect_slots",
+      "count": 1,
+      "active_count": 0,
+      "placement": {"kind": "grid", "origin": [0, 0], "spacing": [0, 0], "columns": 1},
+      "sprite": {"texture": "sprites", "size": [1.1, 1.1], "uv": [0.625, 0, 0.125, 1], "layer": 7}
+    }
+  ],
+  "pools": [
+    {"id": "packets", "group": "packet_slots", "on_exhausted": "skip"},
+    {"id": "effects", "group": "effect_slots", "on_exhausted": "recycle_oldest"}
+  ],
+  "systems": [
+    {"id": "probe_drift", "operation": "linear_motion", "spawn_group": "probe"},
+    {"id": "packet_flight", "operation": "linear_motion", "spawn_group": "packet_slots"},
+    {"id": "physics", "operation": "simulate_collisions"}
+  ],
+  "collision_rules": [
+    {
+      "id": "hazard_bounces",
+      "a": "hazard",
+      "b": "wall",
+      "interaction": "solid",
+      "reactions": [{"kind": "reflect", "target": "a"}]
+    },
+    {
+      "id": "hazard_crosses_probe",
+      "a": "hazard",
+      "b": "probe",
+      "interaction": "trigger",
+      "reactions": []
+    },
+    {
+      "id": "probe_collects_packet",
+      "a": "probe",
+      "b": "packet",
+      "interaction": "trigger",
+      "reactions": []
+    }
+  ],
+  "rules": [
+    {
+      "id": "launch_collection_packet",
+      "event": {"kind": "action_pressed", "action": "collect"},
+      "conditions": [{"kind": "int_state", "state": "health", "op": "gt", "value": 0}],
+      "actions": [
+        {
+          "kind": "spawn_from_pool",
+          "pool": "packets",
+          "position": {"kind": "constant", "value": [-4, 0]},
+          "velocity": [12, 0],
+          "lifetime_ticks": 90,
+          "result_state": "packet_spawn_ok"
+        },
+        {
+          "kind": "spawn_from_pool",
+          "pool": "packets",
+          "position": {"kind": "constant", "value": [-4, 0]},
+          "velocity": [12, 0],
+          "lifetime_ticks": 90,
+          "result_state": "packet_second_ok"
+        }
+      ]
+    },
+    {
+      "id": "launch_short_decoy",
+      "event": {"kind": "action_pressed", "action": "decoy"},
+      "actions": [
+        {
+          "kind": "spawn_from_pool",
+          "pool": "packets",
+          "position": {"kind": "constant", "value": [-4, 3]},
+          "velocity": [0, 0],
+          "lifetime_ticks": 3,
+          "result_state": "packet_spawn_ok"
+        },
+        {
+          "kind": "spawn_from_pool",
+          "pool": "packets",
+          "position": {"kind": "constant", "value": [-4, 3]},
+          "velocity": [0, 0],
+          "lifetime_ticks": 3,
+          "result_state": "packet_second_ok"
+        }
+      ]
+    },
+    {
+      "id": "hazard_contact_begins",
+      "event": {"kind": "contact_begin", "rule": "hazard_crosses_probe"},
+      "actions": [
+        {"kind": "add_int_state", "state": "health", "value": -1},
+        {"kind": "set_int_state", "state": "danger", "value": 1}
+      ]
+    },
+    {
+      "id": "hazard_contact_ends",
+      "event": {"kind": "contact_end", "rule": "hazard_crosses_probe"},
+      "actions": [
+        {"kind": "set_int_state", "state": "danger", "value": 0},
+        {"kind": "add_int_state", "state": "clearances", "value": 1}
+      ]
+    },
+    {
+      "id": "collect_packet_at_contact",
+      "event": {"kind": "contact_begin", "rule": "probe_collects_packet"},
+      "actions": [
+        {"kind": "add_int_state", "state": "score", "value": 1},
+        {
+          "kind": "spawn_from_pool",
+          "pool": "effects",
+          "position": {"kind": "target", "target": {"kind": "collision_b"}},
+          "lifetime_ticks": 8,
+          "result_state": "effect_spawn_ok"
+        },
+        {
+          "kind": "spawn_from_pool",
+          "pool": "effects",
+          "position": {"kind": "target", "target": {"kind": "collision_a"}, "offset": [0.2, 0]},
+          "rotation": 0.7853981633974483,
+          "lifetime_ticks": 8,
+          "result_state": "effect_spawn_ok"
+        },
+        {
+          "kind": "release_to_pool",
+          "pool": "packets",
+          "target": {"kind": "collision_b"},
+          "result_state": "packet_release_ok"
+        }
+      ]
+    }
+  ],
+  "ui": [
+    {"id": "hud_panel", "kind": "panel", "position": [480, 28], "size": [900, 48], "color": [0.03, 0.05, 0.12, 0.9], "layer": 20},
+    {"id": "hud_title", "kind": "text", "position": [125, 28], "size": [220, 32], "text": "PULSE SALVAGE", "font": "ui_font", "text_color": [0.55, 0.95, 1, 1], "layer": 21, "text_scale": 2},
+    {"id": "hud_state", "kind": "text", "position": [480, 28], "size": [320, 32], "text": "SCORE {score}  HULL {health}", "font": "ui_font", "text_color": [1, 1, 0.75, 1], "layer": 21, "text_scale": 2},
+    {"id": "hud_help", "kind": "text", "position": [790, 28], "size": [300, 32], "text": "SPACE COLLECT  DOWN DECOY", "font": "ui_font", "text_color": [0.75, 0.8, 1, 1], "layer": 21, "text_scale": 1.5}
+  ]
+}
