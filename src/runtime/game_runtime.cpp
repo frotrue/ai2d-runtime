@@ -108,6 +108,7 @@ InputKey translate_key(const GameKey key) noexcept {
     return InputKey::escape;
 }
 
+#if defined(AI2D_ENABLE_GPU)
 std::uint32_t decode_utf8(const std::string_view text, std::size_t& offset) noexcept {
     const auto first = static_cast<std::uint8_t>(text[offset++]);
     if (first < 0x80U) return first;
@@ -128,6 +129,7 @@ std::uint32_t decode_utf8(const std::string_view text, std::size_t& offset) noex
     }
     return codepoint;
 }
+#endif
 
 bool directions_are_opposite(const GameDirection first, const GameDirection second) noexcept {
     return (first == GameDirection::up && second == GameDirection::down) ||
@@ -192,7 +194,8 @@ constexpr std::uint64_t maximum_resident_asset_bytes = 512ULL * 1024ULL * 1024UL
 
 std::uint64_t stable_text_hash(const std::string_view value) noexcept {
     std::uint64_t hash = 14'695'981'039'346'656'037ULL;
-    for (const unsigned char byte : value) {
+    for (const char character : value) {
+        const auto byte = static_cast<unsigned char>(character);
         hash ^= byte;
         hash *= 1'099'511'628'211ULL;
     }

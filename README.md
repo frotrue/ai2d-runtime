@@ -17,6 +17,16 @@ python tools/engine.py test --preset dev --json
 
 `bootstrap` downloads checksum-pinned LunarG Vulkan SDK 1.4.350.0 and Slang 2026.14.1 assets into ignored `artifacts/toolchain/`; it does not rely on a floating latest URL. The Vulkan SDK copy supplies headers, tools, and validation layers while the system GPU driver supplies the Vulkan runtime.
 
+### CPU-only checks on Linux
+
+With CMake 3.28+, Ninja, Python 3.10+ and a C++23 compiler installed (validated with GCC 13.3), run:
+
+```sh
+python tools/engine.py test --preset gpu-off --json
+```
+
+`doctor` discovers the native compiler or the executable and arguments selected by `CXX`. It still reports unavailable GPU tools separately. The portable SDK bootstrap and playable package remain Windows-specific. Legacy GameSpec 0.2–0.5 plan hashes include installation paths; their compatibility tests normalize paths in a test-only copy. GameSpec 0.6 retains its relocation-independent runtime hash.
+
 Other configured build modes:
 
 ```powershell
@@ -61,3 +71,5 @@ Public execution plans are revalidated at the runtime boundary, even if callers 
 The complete boundary and formats live in [the architecture overview](docs/architecture/overview.md), [0.6 content-foundations contract](docs/game-spec-v0.6.md), [0.5 motion/contact contract](docs/game-spec-v0.5.md), [0.4 pool contract](docs/game-spec-v0.4.md), [0.3 contract](docs/game-spec-v0.3.md), [0.2 contract](docs/game-spec-v0.2.md), [0.5→0.6 migration guide](docs/migration-0.5-to-0.6.md), [ScenarioSpec contract](docs/scenario-spec.md), and [ADRs](docs/adr/).
 
 v0.6 validation and release-gate evidence is recorded in the [v0.6 implementation report](docs/reports/v0.6-implementation-report.md).
+
+The [2026-09-08 reliability review](docs/reports/reliability-review-2026-09-08.md) records subsequent fixes, CPU validation and remaining priorities.

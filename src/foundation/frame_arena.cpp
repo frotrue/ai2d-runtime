@@ -1,7 +1,7 @@
 #include "ai2d/foundation/frame_arena.hpp"
 
 #include <algorithm>
-#include <limits>
+#include <memory>
 
 namespace ai2d {
 
@@ -14,20 +14,24 @@ std::span<std::byte> FrameArena::try_allocate(const std::size_t bytes, const std
         return {};
     }
 
-    const auto mask = alignment - 1U;
-    if (offset_ > std::numeric_limits<std::size_t>::max() - mask) {
-        ++overflows_;
+    if (storage_.empty()) {
+        if (bytes != 0U) {
+            ++overflows_;
+        }
         return {};
     }
-    const auto aligned_offset = (offset_ + mask) & ~mask;
-    if (aligned_offset > storage_.size() || bytes > storage_.size() - aligned_offset) {
+    // The byte vector's base is not necessarily aligned for over-aligned types.
+    // Align the actual address, charging any padding against the fixed budget.
+    void* address = storage_.data() + offset_;
+    auto space = storage_.size() - offset_;
+    if (std::align(alignment, bytes, address, space) == nullptr) {
         ++overflows_;
         return {};
     }
 
-    offset_ = aligned_offset + bytes;
+    offset_ = storage_.size() - space + bytes;
     peak_ = std::max(peak_, offset_);
-    return {storage_.data() + aligned_offset, bytes};
+    return {static_cast<std::byte*>(address), bytes};
 }
 
 void FrameArena::reset() noexcept {

@@ -56,6 +56,13 @@ public:
                 "world",
                 "The entity already owns this component"));
         }
+        if (sparse_[entity.index] != missing) {
+            return std::unexpected(Diagnostic::make(
+                DiagnosticCode::world_stale_entity,
+                Severity::error,
+                "world",
+                "Component insertion conflicts with an existing entity generation"));
+        }
         if (components_.size() >= capacity_limit_ || components_.size() >= components_.capacity() ||
             entities_.size() >= entities_.capacity()) {
             return std::unexpected(Diagnostic::make(

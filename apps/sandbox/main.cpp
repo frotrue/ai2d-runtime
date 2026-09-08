@@ -20,6 +20,7 @@
 
 namespace {
 
+#if defined(AI2D_ENABLE_GPU)
 std::string environment_value(const char* const name) {
 #if defined(_WIN32)
     char* buffer = nullptr;
@@ -35,6 +36,7 @@ std::string environment_value(const char* const name) {
     return value != nullptr ? std::string{value} : std::string{};
 #endif
 }
+#endif
 
 struct Arguments final {
     std::uint32_t frames{8U};

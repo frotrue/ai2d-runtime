@@ -137,14 +137,16 @@ def main() -> int:
         )
         assert rejected["diagnostics"][0]["code"] == "GAME_TEST_ASSERTION_FAILED"
 
+    # Legacy plan hashes include absolute paths. Test-only normalized plan
+    # goldens live in test_game.cpp; source hashes remain portable here.
     fixed_hashes = {
-        "breakout": (9083610792174461301, 6721347758608948258),
-        "snake": (17470168603721065075, 8662144749949340176),
-        "grid_collector": (2351439514531659049, 8174193443164806110),
-        "projectile_arena": (10559158477999424372, 2568389474762519076),
-        "timed_pickups": (5690496091730965423, 1461871726252971360),
-        "pool_dodger": (7397713390522847020, 13989442041582692557),
-        "blackbox_core_game": (1039433421557313106, 14953015342986406049),
+        "breakout": 9083610792174461301,
+        "snake": 17470168603721065075,
+        "grid_collector": 2351439514531659049,
+        "projectile_arena": 10559158477999424372,
+        "timed_pickups": 5690496091730965423,
+        "pool_dodger": 7397713390522847020,
+        "blackbox_core_game": 1039433421557313106,
     }
     for sample, expected in fixed_hashes.items():
         inspected = invoke(
@@ -153,7 +155,12 @@ def main() -> int:
             "inspect",
             str(arguments.root / "samples" / sample / "game.json"),
         )["metrics"]
-        assert (inspected["source_hash"], inspected["plan_hash"]) == expected
+        assert inspected["source_hash"] == expected
+        repeated = invoke(
+            arguments.binary, "game", "inspect",
+            str(arguments.root / "samples" / sample / "game.json"),
+        )["metrics"]
+        assert inspected["plan_hash"] == repeated["plan_hash"]
 
     if arguments.gpu:
         for sample in (siege, course, pulse):

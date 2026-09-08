@@ -9,6 +9,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -343,11 +344,29 @@ def git_metadata(environment: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def compiler_command(environment: dict[str, str]) -> list[str]:
+    if os.name != "nt" and environment.get("CXX"):
+        # CMake accepts a compiler executable followed by required arguments.
+        # An explicit but missing CXX must not silently fall back to another tool.
+        command = shlex.split(environment["CXX"])
+        if not command:
+            return []
+        executable = shutil.which(command[0], path=environment.get("PATH"))
+        return [executable, *command[1:]] if executable else []
+    candidates = ("cl",) if os.name == "nt" else ("c++", "g++", "clang++")
+    for candidate in candidates:
+        executable = shutil.which(candidate, path=environment.get("PATH"))
+        if executable:
+            return [executable]
+    return []
+
+
 def command_doctor(_: argparse.Namespace) -> tuple[dict[str, Any], int]:
     environment, discovery = build_environment()
     cmake = find_cmake()
     ninja = find_ninja()
-    compiler = shutil.which("cl", path=environment.get("PATH"))
+    compiler_invocation = compiler_command(environment)
+    compiler = compiler_invocation[0] if compiler_invocation else None
     vulkaninfo_path = shutil.which("vulkaninfo", path=environment.get("PATH"))
     vulkaninfo = Path(vulkaninfo_path) if vulkaninfo_path else None
     slangc = find_slangc()
@@ -370,7 +389,11 @@ def command_doctor(_: argparse.Namespace) -> tuple[dict[str, Any], int]:
                     "tooling",
                     f"Required build tool '{name}' was not found",
                     context={"tool": name},
-                    suggestions=["Install Visual Studio 2022 Build Tools or add the tool to PATH."],
+                    suggestions=[
+                        "Install Visual Studio 2022 Build Tools or add the tool to PATH."
+                        if os.name == "nt" else
+                        "Install CMake, Ninja and a C++23 compiler; add them to PATH or set CXX."
+                    ],
                 )
             )
 
@@ -442,7 +465,11 @@ def command_doctor(_: argparse.Namespace) -> tuple[dict[str, Any], int]:
             **optional_tools,
             "cmake_version": version_line(cmake, ["--version"], environment),
             "ninja_version": version_line(ninja, ["--version"], environment),
-            "compiler_version": version_line(Path(compiler) if compiler else None, [], environment),
+            "compiler_version": version_line(
+                Path(compiler) if compiler else None,
+                [*compiler_invocation[1:], *([] if os.name == "nt" else ["--version"])],
+                environment,
+            ),
             "python_version": platform.python_version(),
             "slang_version": version_line(slangc, ["-version"], environment),
             "spirv_tools_version": version_line(spirv_val, ["--version"], environment),
@@ -719,7 +746,9 @@ def command_test(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
         print(process.stdout, file=sys.stderr, end="")
     if process.stderr:
         print(process.stderr, file=sys.stderr, end="")
-    passed_match = re.search(r"(\d+)% tests passed, (\d+) tests failed out of (\d+)", process.stdout)
+    passed_match = re.search(
+        r"(\d+)% tests passed(?:, (\d+) tests failed)? out of (\d+)", process.stdout
+    )
     metrics: dict[str, Any] = {
         "preset": arguments.preset,
         "duration_seconds": time.perf_counter() - start,
@@ -729,9 +758,9 @@ def command_test(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
         metrics.update(
             {
                 "pass_percent": int(passed_match.group(1)),
-                "failed": int(passed_match.group(2)),
+                "failed": int(passed_match.group(2) or 0),
                 "total": int(passed_match.group(3)),
-                "passed": int(passed_match.group(3)) - int(passed_match.group(2)),
+                "passed": int(passed_match.group(3)) - int(passed_match.group(2) or 0),
             }
         )
     if process.returncode != 0:

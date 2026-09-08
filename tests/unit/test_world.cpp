@@ -65,6 +65,28 @@ TEST_CASE("DenseStorage preserves sparse mapping through swap-remove") {
     REQUIRE(storage.runtime_capacity_growth_events() == 0U);
 }
 
+TEST_CASE("DenseStorage rejects a different generation in an occupied sparse slot") {
+    ai2d::DenseStorage<ai2d::Transform2D> storage{};
+    REQUIRE(storage.reserve(2U, 2U));
+    const ai2d::EntityId original{0U, 1U};
+    const ai2d::EntityId replacement{0U, 2U};
+    REQUIRE(storage.insert(original, {{7.0F, 0.0F}, 0.0F, {1.0F, 1.0F}}));
+
+    const auto conflict = storage.insert(replacement, {});
+    REQUIRE_FALSE(conflict);
+    CHECK(conflict.error().code == ai2d::DiagnosticCode::world_stale_entity);
+    CHECK(storage.size() == 1U);
+    REQUIRE(storage.get(original) != nullptr);
+    CHECK(storage.get(original)->position.x == 7.0F);
+    CHECK_FALSE(storage.contains(replacement));
+
+    REQUIRE(storage.remove(original));
+    REQUIRE(storage.insert(replacement, {}));
+    CHECK_FALSE(storage.contains(original));
+    CHECK(storage.contains(replacement));
+    CHECK(storage.runtime_capacity_growth_events() == 0U);
+}
+
 TEST_CASE("World typed query iterates the smallest storage and exact membership") {
     ai2d::World world{};
     REQUIRE(world.reserve(4U));
