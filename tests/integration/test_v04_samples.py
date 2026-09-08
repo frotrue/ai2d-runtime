@@ -108,7 +108,7 @@ def main() -> int:
     dodger_script = dodger_root / "input" / "pool-lifecycle-and-restart.json"
     dodger = run(arguments.binary, dodger_root / "game.json", dodger_script, 48)
     dodger_repeat = run(arguments.binary, dodger_root / "game.json", dodger_script, 48)
-    assert dodger["plan_hash"] == 13989442041582692557
+    assert dodger["plan_hash"] == dodger_repeat["plan_hash"]
     assert dodger["scene"] == "play"
     assert dodger["states"]["health"] == 2
     assert dodger["states"]["score"] == 20

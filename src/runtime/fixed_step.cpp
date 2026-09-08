@@ -35,18 +35,27 @@ Result<FixedStepAdvance> FixedStepClock::advance(const double elapsed_seconds) {
     const auto accepted = std::min(elapsed_seconds, config_.maximum_frame_seconds);
     result.frame_time_clamped = accepted != elapsed_seconds;
     result.dropped_seconds = elapsed_seconds - accepted;
-    accumulator_seconds_ += accepted;
-    const auto available_ticks = static_cast<std::uint64_t>(accumulator_seconds_ / config_.step_seconds);
-    result.tick_count = static_cast<std::uint32_t>(
-        std::min<std::uint64_t>(available_ticks, config_.maximum_catch_up_ticks));
-    result.catch_up_limited = available_ticks > config_.maximum_catch_up_ticks;
-    accumulator_seconds_ -= static_cast<double>(result.tick_count) * config_.step_seconds;
-    if (result.catch_up_limited) {
-        const auto retained = std::fmod(accumulator_seconds_, config_.step_seconds);
-        result.dropped_seconds += accumulator_seconds_ - retained;
-        accumulator_seconds_ = retained;
+    auto accumulator = accumulator_seconds_ + accepted;
+    if (!std::isfinite(accumulator)) {
+        return std::unexpected(clock_error("Fixed-step accumulator exceeds the finite range"));
     }
-    result.interpolation_alpha = std::clamp(accumulator_seconds_ / config_.step_seconds, 0.0, 1.0);
+    // Bound the quotient before converting: valid finite durations can still
+    // describe more ticks than any integer type can represent.
+    const auto available_ticks = std::floor(accumulator / config_.step_seconds);
+    result.tick_count = static_cast<std::uint32_t>(
+        std::min(available_ticks, static_cast<double>(config_.maximum_catch_up_ticks)));
+    result.catch_up_limited = available_ticks > config_.maximum_catch_up_ticks;
+    accumulator -= static_cast<double>(result.tick_count) * config_.step_seconds;
+    if (result.catch_up_limited) {
+        const auto retained = std::fmod(accumulator, config_.step_seconds);
+        result.dropped_seconds += accumulator - retained;
+        accumulator = retained;
+    }
+    if (!std::isfinite(result.dropped_seconds)) {
+        return std::unexpected(clock_error("Fixed-step dropped time exceeds the finite range"));
+    }
+    accumulator_seconds_ = accumulator;
+    result.interpolation_alpha = std::clamp(accumulator / config_.step_seconds, 0.0, 1.0);
     return result;
 }
 

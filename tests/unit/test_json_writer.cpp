@@ -24,6 +24,13 @@ TEST_CASE("JsonWriter emits locale-independent nested JSON") {
     REQUIRE(writer.str() == R"({"text":"line\n\"quoted\"","values":[-7,9,1.25,true,null]})");
 }
 
+TEST_CASE("JsonWriter preserves UTF-8 bytes while escaping ASCII control characters") {
+    ai2d::JsonWriter writer{};
+    writer.value("\xED\x95\x9C\n");
+    REQUIRE(writer.complete());
+    CHECK(writer.str() == "\"\xED\x95\x9C\\n\"");
+}
+
 TEST_CASE("JsonWriter maps non-finite numbers to null") {
     ai2d::JsonWriter writer{};
     writer.begin_array();

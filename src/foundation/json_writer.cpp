@@ -40,7 +40,8 @@ bool JsonWriter::before_value() {
 void JsonWriter::append_escaped(const std::string_view text) {
     constexpr std::array<char, 16> hex{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
     output_.push_back('"');
-    for (const unsigned char character : text) {
+    for (const char value : text) {
+        const auto character = static_cast<unsigned char>(value);
         switch (character) {
         case '"': output_ += "\\\""; break;
         case '\\': output_ += "\\\\"; break;

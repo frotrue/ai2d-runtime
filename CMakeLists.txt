@@ -279,6 +279,9 @@ if(BUILD_TESTING)
     add_test(NAME engine_package_contract
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_engine_package.py" "${CMAKE_CURRENT_SOURCE_DIR}"
     )
+    add_test(NAME engine_tooling_contract
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_engine_tooling.py"
+    )
     add_test(NAME benchmark_compare_policy
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_benchmark_compare.py"
     )

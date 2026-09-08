@@ -73,6 +73,7 @@ def main() -> int:
         original_capture = engine.run_capture
         original_forward = engine.forward_runtime
         original_replace = engine._replace_package_path
+        original_os = engine.os
         engine.ROOT = root
         engine.configure_and_build = lambda preset: (engine.envelope("build", "pass"), engine.EXIT_PASS)
         engine.build_environment = lambda: ({}, {})
@@ -141,6 +142,14 @@ def main() -> int:
                 preset="package",
                 json=True,
             )
+            if original_os.name != "nt":
+                unavailable, unavailable_exit = engine.command_package(arguments)
+                assert unavailable_exit == engine.EXIT_UNAVAILABLE
+                assert unavailable["diagnostics"][0]["code"] == "COMMAND_UNAVAILABLE"
+                assert not output.exists()
+            # Build and runtime inspection are already mocked above. Mock only
+            # engine's host gate too, leaving pathlib and real file I/O native.
+            engine.os = SimpleNamespace(**{**vars(original_os), "name": "nt"})
             document, exit_code = engine.command_package(arguments)
             assert exit_code == engine.EXIT_PASS and document["status"] == "pass", document
             package_dir = output / "package_test-windows-x64"
@@ -261,6 +270,7 @@ def main() -> int:
             assert overlap_exit == engine.EXIT_INVALID and overlap["status"] == "fail"
             assert overlap_manifest.read_text(encoding="utf-8") == '{"schema_version":"0.3"}\n'
         finally:
+            engine.os = original_os
             engine.ROOT = original_root
             engine.configure_and_build = original_build
             engine.build_environment = original_environment

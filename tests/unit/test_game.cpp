@@ -22,6 +22,21 @@
 
 namespace {
 
+std::uint64_t fixture_plan_hash(ai2d::GamePlan plan) {
+    // Legacy runtime hashes deliberately include installation paths. Normalize
+    // a test-only copy so compatibility goldens work in every checkout location.
+    for (auto& asset : plan.assets) {
+        asset.path = asset.path.lexically_relative(plan.content_root);
+        if (!asset.metadata_path.empty()) {
+            asset.metadata_path = asset.metadata_path.lexically_relative(plan.content_root);
+        }
+    }
+    for (auto& scene : plan.scenes) {
+        scene.source_path = scene.source_path.lexically_relative(plan.content_root);
+    }
+    return ai2d::compute_game_plan_hash(plan);
+}
+
 std::filesystem::path breakout_manifest() {
     return std::filesystem::path{AI2D_SOURCE_DIR} / "samples" / "breakout" / "game.json";
 }
@@ -101,7 +116,7 @@ TEST_CASE("GameManifest 0.2 compiles all declarative Breakout scenes") {
     CHECK(plan->scenes[0].ui[2].text_color == ai2d::Color{});
     CHECK(plan->plan_hash == ai2d::compute_game_plan_hash(*plan));
     CHECK(plan->source_hash == 9083610792174461301ULL);
-    CHECK(plan->plan_hash == 6721347758608948258ULL);
+    CHECK(fixture_plan_hash(*plan) == 17792192242253873790ULL);
     CHECK(plan->schema_version_text() == "0.2");
     CHECK(ai2d::validate_game_plan(*plan));
 
@@ -127,14 +142,32 @@ TEST_CASE("GameManifest 0.3 compiles typed grids systems and ordered rules") {
         return system.operation == ai2d::GameOperationId::grid_motion;
     }));
     CHECK(plan->source_hash == 17470168603721065075ULL);
-    CHECK(plan->plan_hash == 8662144749949340176ULL);
+    CHECK(fixture_plan_hash(*plan) == 3712499034130778974ULL);
     CHECK(ai2d::validate_game_plan(*plan));
 
     const auto collector = ai2d::compile_game_file(grid_collector_manifest());
     REQUIRE(collector);
     CHECK(collector->source_hash == 2351439514531659049ULL);
-    CHECK(collector->plan_hash == 8174193443164806110ULL);
+    CHECK(fixture_plan_hash(*collector) == 16162811064590258020ULL);
     CHECK(ai2d::validate_game_plan(*collector));
+}
+
+TEST_CASE("Legacy sample plan goldens are independent of the checkout location") {
+    struct Fixture final { const char* name; std::uint64_t hash; };
+    constexpr std::array fixtures{
+        Fixture{"projectile_arena", 1283270312434049846ULL},
+        Fixture{"timed_pickups", 10119323561695262307ULL},
+        Fixture{"pool_dodger", 6793763572502631445ULL},
+        Fixture{"blackbox_core_game", 12844763610701993817ULL},
+    };
+    for (const auto& fixture : fixtures) {
+        CAPTURE(fixture.name);
+        const auto plan = ai2d::compile_game_file(
+            std::filesystem::path{AI2D_SOURCE_DIR} / "samples" / fixture.name / "game.json");
+        REQUIRE(plan);
+        CHECK(plan->plan_hash == ai2d::compute_game_plan_hash(*plan));
+        CHECK(fixture_plan_hash(*plan) == fixture.hash);
+    }
 }
 
 TEST_CASE("GameManifest 0.4 compiles bounded pools and numeric pool actions") {
